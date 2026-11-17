@@ -1,0 +1,254 @@
+<!doctype html>
+<!--
+  SPDX-FileCopyrightText: Johannes Meyer zum Alten Borgloh
+  SPDX-License-Identifier: BSD-3-Clause
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- The page loads and sends nothing beyond its own site: the chosen files stay on the computer. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>Sailfish OS Installer</title>
+    <meta name="description" content="Install the Sailfish OS community port on the Sony Xperia 10 VI from the browser." />
+    <link rel="stylesheet" href="css/style.css" />
+    <script type="module" src="js/app.js"></script>
+  </head>
+  <body>
+    <header>
+      <h1>Install Sailfish OS on the Sony Xperia 10 VI</h1>
+      <p class="lead">
+        This page installs the Sailfish OS community port for the Xperia 10 VI (pdx246) from your browser. It does
+        what <code>flash.sh</code> in the image zip does, without installing anything on your computer.
+      </p>
+      <p class="small">
+        Unofficial community port, not affiliated with Jolla or Sony.
+        <strong>Prototype:</strong> tested once on a real phone, with Chrome on Linux.
+      </p>
+      <div id="mock-banner" class="mock" hidden>
+        <strong>Simulation.</strong> A simulated phone stands in for USB; nothing reaches a real device.
+        Phone: <span id="mock-where">?</span>.
+        <button type="button" id="mock-fastboot" class="small-btn">Switch it off and start it in fastboot mode</button>
+      </div>
+    </header>
+
+    <main>
+      <section>
+        <h2>Before you start</h2>
+        <ul>
+          <li>
+            <strong>Installing erases all data on the phone</strong> (apps, photos, files) and replaces the boot
+            images of slot a.
+          </li>
+          <li>The phone's bootloader must be unlocked, with Sony's unlock procedure.</li>
+          <li>
+            For a first installation the phone must run <strong>LineageOS 23.2 for pdx246</strong>, release
+            v23.2-20260924, installed on slot a and started once to its home screen (wait a minute there, so that
+            its setup completes).
+          </li>
+          <li>
+            Keep that LineageOS release's images (<code>boot.img</code>, <code>vendor_boot.img</code>,
+            <code>dtbo.img</code>, <code>vendor_dlkm.img</code>, <code>recovery.img</code>). They are the only way
+            back, and installing again over Sailfish OS needs them.
+          </li>
+          <li>Charge the phone to at least 50 %.</li>
+        </ul>
+        <p class="small">
+          The full instructions, including installing without this page, are in
+          <a href="https://github.com/sailfishos-sony-pdx246/main/blob/main/INSTALL.md">INSTALL.md</a>.
+        </p>
+      </section>
+
+      <section>
+        <h2>Your computer</h2>
+        <p id="browser-check" class="status" hidden></p>
+        <p>
+          Use Chrome, Chromium, Microsoft Edge or Brave on Windows, macOS, Linux or ChromeOS. Firefox and Safari
+          cannot talk to USB devices from a web page. Plug the phone directly into the computer, not through a hub,
+          a docking station or a virtual machine.
+        </p>
+        <details>
+          <summary>Linux</summary>
+          <p>
+            The browser needs permission to open the phone. Distributions with systemd 258 or newer (Ubuntu 26.04,
+            for example) give it automatically. Others need udev rules: many have a package with them (for example
+            <code>android-udev-rules</code>); otherwise create them once:
+          </p>
+          <pre>sudo tee /etc/udev/rules.d/51-xperia-fastboot.rules &lt;&lt;'EOF'
+SUBSYSTEM=="usb", ATTR{idVendor}=="0fce", ATTR{idProduct}=="0dde", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", ATTR{idProduct}=="4ee0", TAG+="uaccess"
+EOF
+sudo udevadm control --reload-rules</pre>
+          <p>
+            Then plug the phone in again. If the browser still cannot open it, the firmware update service may have
+            taken it: <code>sudo systemctl stop fwupd</code> (until the next restart).
+          </p>
+          <p>
+            Ubuntu's Chromium is a snap, which may open USB devices only after
+            <code>sudo snap connect chromium:raw-usb</code>; restart Chromium afterwards.
+          </p>
+        </details>
+        <details>
+          <summary>Windows</summary>
+          <p>
+            Windows needs a driver for the phone's fastboot mode. Install Google's USB driver, then in the Device
+            Manager choose the phone (it may appear as an unknown device or as <em>Android</em>), <em>Update
+            driver</em>, <em>Browse my computer</em>, <em>Let me pick</em>, <em>Have disk</em>, select
+            <code>android_winusb.inf</code> and <em>Android Bootloader Interface</em>. Not yet tested with this
+            page.
+          </p>
+        </details>
+        <details>
+          <summary>macOS and ChromeOS</summary>
+          <p>Nothing to install.</p>
+        </details>
+      </section>
+
+      <section id="readonly-section" hidden>
+        <h2>Read-only check</h2>
+        <p>
+          This page is in read-only mode. It asks the phone only for its model, firmware versions and lock state,
+          the questions <code>flash.sh</code> asks first, and refuses to send anything else: it cannot change or
+          restart the phone. Connect the phone below.
+        </p>
+        <table id="readonly-results" class="results" hidden></table>
+        <p id="readonly-verdict" class="status" hidden></p>
+      </section>
+
+      <section id="sec-action">
+        <h2><span class="num">1</span> What do you want to do?</h2>
+        <fieldset class="choices">
+          <legend class="visually-hidden">Action</legend>
+          <label>
+            <input type="radio" name="action" value="install" checked />
+            <span><strong>Install Sailfish OS.</strong> The phone runs LineageOS 23.2.</span>
+          </label>
+          <label>
+            <input type="radio" name="action" value="again" />
+            <span>
+              <strong>Install Sailfish OS again.</strong> The phone runs Sailfish OS, or an earlier installation
+              stopped after writing the boot image. Needs the LineageOS images.
+            </span>
+          </label>
+          <label>
+            <input type="radio" name="action" value="back" />
+            <span><strong>Go back to LineageOS 23.2.</strong> Needs the LineageOS images.</span>
+          </label>
+        </fieldset>
+      </section>
+
+      <section id="sec-files">
+        <h2><span class="num">2</span> Choose the files</h2>
+        <div id="zip-field" class="field">
+          <label for="zip-input">Sailfish OS image zip</label>
+          <input type="file" id="zip-input" accept=".zip,application/zip" />
+          <p class="small">
+            <code>Sailfish_OS-…-pdx246-….zip</code> from the
+            <a href="https://github.com/sailfishos-sony-pdx246/main/releases/latest">releases page</a>. Do not
+            unpack it; this page reads it as it is and checks it first.
+          </p>
+          <p id="zip-status" class="status" hidden></p>
+          <label id="zip-override" class="override" hidden>
+            <input type="checkbox" id="zip-override-box" /> I built this image myself and want to install it anyway.
+          </label>
+        </div>
+        <div id="lineage-field" class="field" hidden>
+          <label for="lineage-input">LineageOS images</label>
+          <input type="file" id="lineage-input" accept=".img" multiple />
+          <p class="small">
+            Choose all of them at once: <span id="lineage-needs"></span>, from the
+            <a href="https://github.com/johanneszab/lineageos-pdx246-releases/releases/tag/v23.2-20260924">LineageOS
+              release v23.2-20260924</a>.
+          </p>
+          <ul id="lineage-status" class="checklist"></ul>
+          <label id="lineage-override" class="override" hidden>
+            <input type="checkbox" id="lineage-override-box" /> Use these images anyway.
+          </label>
+        </div>
+      </section>
+
+      <section id="sec-connect">
+        <h2><span class="num">3</span> Connect the phone</h2>
+        <ol>
+          <li>Switch the phone off.</li>
+          <li>
+            Hold <strong>volume up</strong> and plug in the USB cable. The screen stays dark apart from a small mark
+            in its top left corner: the phone is in fastboot mode.
+          </li>
+          <li>Click <em>Connect</em> and choose the phone in the list the browser shows.</li>
+        </ol>
+        <button type="button" id="connect-btn">Connect</button>
+        <p id="connect-status" class="status" hidden></p>
+      </section>
+
+      <section id="sec-install">
+        <h2><span class="num">4</span> Install</h2>
+        <p>
+          This takes about ten minutes. Do not unplug the phone or close this page. The phone restarts twice during
+          the installation; the first time it restarts into fastbootd, the browser asks you to choose the phone
+          again.
+        </p>
+        <button type="button" id="start-btn" class="primary" disabled>Start</button>
+        <span id="start-why" class="small"></span>
+        <label class="sound small"><input type="checkbox" id="sound-box" checked /> Play a sound when the page needs
+          you</label>
+        <ol id="step-list" class="steps"></ol>
+        <div class="progress-row">
+          <progress id="progress" max="1" value="0"></progress>
+          <span id="progress-text" class="small"></span>
+        </div>
+        <div id="wait-panel" class="panel" hidden>
+          <p id="wait-text"></p>
+          <button type="button" id="wait-connect" class="primary">Connect</button>
+          <span id="wait-time" class="small"></span>
+          <p id="wait-error" class="status bad" hidden></p>
+          <p id="wait-slow" class="status warn" hidden></p>
+          <button type="button" id="wait-stop" hidden>Stop</button>
+        </div>
+        <div id="error-panel" class="panel error" hidden>
+          <p id="error-title"></p>
+          <div id="error-advice"></div>
+        </div>
+      </section>
+
+      <section id="step-done" hidden>
+        <h2><span class="num">5</span> Done</h2>
+        <p id="done-text"></p>
+        <button type="button" id="reboot-btn" class="primary">Restart the phone</button>
+        <div id="first-start">
+          <h3>The first start</h3>
+          <ul>
+            <li>
+              The first start takes longer. After the language and the terms, the phone encrypts its data; this
+              needs a charger or more than 30 % battery.
+            </li>
+            <li>
+              It then asks for a <strong>security code</strong>, which every start asks for. Choose one you will
+              remember: a forgotten code cannot be reset, the only way back is installing again, which erases all
+              data.
+            </li>
+            <li>Mobile data and calls over VoLTE work after you enable mobile data in Settings, Mobile network.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section>
+        <details id="log-details">
+          <summary>Log</summary>
+          <pre id="log"></pre>
+          <button type="button" id="copy-log" class="small-btn">Copy the log</button>
+        </details>
+      </section>
+    </main>
+
+    <footer class="small">
+      Sailfish OS for the Xperia 10 VI:
+      <a href="https://github.com/sailfishos-sony-pdx246">github.com/sailfishos-sony-pdx246</a>. This page talks to
+      the phone directly over USB; the files you choose never leave your computer. Its source:
+      <a href="https://github.com/sailfishos-sony-pdx246/web-installer">web-installer</a>.
+    </footer>
+  </body>
+</html>

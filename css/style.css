@@ -1,0 +1,403 @@
+/*
+ * SPDX-FileCopyrightText: Johannes Meyer zum Alten Borgloh
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
+:root {
+  --bg: #f7f8fa;
+  --card: #ffffff;
+  --text: #1d2229;
+  --muted: #5b6573;
+  --border: #d9dee5;
+  --accent: #0b6bcb;
+  --accent-text: #ffffff;
+  --good: #1a7f37;
+  --good-bg: #e9f6ec;
+  --warn: #8a5a00;
+  --warn-bg: #fff5d6;
+  --bad: #b42318;
+  --bad-bg: #fdecea;
+  --work-bg: #eaf2fc;
+  --code-bg: #eef1f5;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14171c;
+    --card: #1d2229;
+    --text: #e6e9ee;
+    --muted: #a3acb9;
+    --border: #343b46;
+    --accent: #4c9ce8;
+    --accent-text: #0b1520;
+    --good: #5cc97b;
+    --good-bg: #16301f;
+    --warn: #e7b94b;
+    --warn-bg: #352b10;
+    --bad: #f2867b;
+    --bad-bg: #3a1b18;
+    --work-bg: #172a40;
+    --code-bg: #262c35;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+header,
+main,
+footer {
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 0 1rem;
+}
+
+header {
+  padding-top: 2rem;
+}
+
+h1 {
+  font-size: 1.7rem;
+  line-height: 1.25;
+  margin: 0 0 0.75rem;
+}
+
+h2 {
+  font-size: 1.2rem;
+  margin: 0 0 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+h3 {
+  font-size: 1rem;
+  margin: 1.25rem 0 0.25rem;
+}
+
+.lead {
+  font-size: 1.05rem;
+}
+
+.small {
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+section {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.25rem;
+  margin: 1rem 0;
+}
+
+.num {
+  display: inline-grid;
+  place-items: center;
+  width: 1.7rem;
+  height: 1.7rem;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 0.95rem;
+  flex: none;
+}
+
+a {
+  color: var(--accent);
+}
+
+code,
+pre {
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 0.85em;
+  background: var(--code-bg);
+  border-radius: 4px;
+}
+
+code {
+  padding: 0.05em 0.3em;
+  overflow-wrap: anywhere;
+}
+
+pre {
+  padding: 0.75rem;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+#log {
+  max-height: 22rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+ul,
+ol {
+  padding-left: 1.4rem;
+}
+
+details summary {
+  cursor: pointer;
+  font-weight: 600;
+  margin: 0.5rem 0;
+}
+
+button {
+  font: inherit;
+  padding: 0.5rem 1.1rem;
+  border-radius: 8px;
+  border: 1px solid var(--accent);
+  background: var(--card);
+  color: var(--accent);
+  cursor: pointer;
+}
+
+button.primary {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+button.small-btn {
+  padding: 0.2rem 0.6rem;
+  font-size: 0.85rem;
+}
+
+fieldset.choices {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.6rem;
+}
+
+fieldset.choices label {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+fieldset.choices input {
+  margin-top: 0.35rem;
+}
+
+.field {
+  margin-bottom: 1rem;
+}
+
+.field > label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.3rem;
+}
+
+input[type="file"] {
+  max-width: 100%;
+}
+
+.override {
+  display: block;
+  margin-top: 0.5rem;
+}
+
+.status {
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  margin: 0.75rem 0 0;
+}
+
+.status.good {
+  background: var(--good-bg);
+  color: var(--good);
+}
+
+.status.warn {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.status.bad {
+  background: var(--bad-bg);
+  color: var(--bad);
+}
+
+.status.work {
+  background: var(--work-bg);
+}
+
+.checklist {
+  list-style: none;
+  padding: 0;
+}
+
+.checklist li::before,
+.steps li::before {
+  display: inline-block;
+  width: 1.4rem;
+}
+
+.checklist li.good::before {
+  content: "✓";
+  color: var(--good);
+}
+
+.checklist li.warn::before {
+  content: "!";
+  color: var(--warn);
+}
+
+.checklist li.missing::before {
+  content: "–";
+  color: var(--muted);
+}
+
+.checklist li.work::before {
+  content: "…";
+}
+
+.steps {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0 0.5rem;
+}
+
+.steps li {
+  padding: 0.15rem 0;
+}
+
+.steps li.pending {
+  color: var(--muted);
+}
+
+.steps li.pending::before {
+  content: "○";
+}
+
+.steps li.running {
+  font-weight: 600;
+}
+
+.steps li.running::before {
+  content: "▶";
+  color: var(--accent);
+}
+
+.steps li.done::before {
+  content: "✓";
+  color: var(--good);
+}
+
+.steps li.failed {
+  color: var(--bad);
+}
+
+.steps li.failed::before {
+  content: "✗";
+}
+
+label.sound {
+  display: block;
+  margin-top: 0.6rem;
+}
+
+button:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.progress-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+progress {
+  flex: 1;
+  height: 0.8rem;
+  accent-color: var(--accent);
+}
+
+.panel {
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  background: var(--work-bg);
+}
+
+.panel.error {
+  background: var(--bad-bg);
+  color: var(--bad);
+}
+
+.panel.error #error-title {
+  font-weight: 600;
+}
+
+table.results {
+  border-collapse: collapse;
+  width: 100%;
+  margin-top: 0.75rem;
+  font-size: 0.9rem;
+}
+
+table.results th,
+table.results td {
+  text-align: left;
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+
+table.results th {
+  width: 40%;
+  font-weight: 600;
+}
+
+table.results td.time {
+  width: 4.5rem;
+  color: var(--muted);
+  text-align: right;
+}
+
+.mock {
+  margin: 1rem 0;
+  padding: 0.6rem 0.9rem;
+  border-radius: 8px;
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+footer {
+  padding-bottom: 2rem;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}

@@ -1,0 +1,28 @@
+<!doctype html>
+<!--
+  SPDX-FileCopyrightText: Johannes Meyer zum Alten Borgloh
+  SPDX-License-Identifier: BSD-3-Clause
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Installer Tests</title>
+    <style>
+      body { font: 15px/1.5 system-ui, sans-serif; margin: 1.5rem; background: #fff; color: #111; }
+      @media (prefers-color-scheme: dark) { body { background: #15181d; color: #e8eaed; } }
+      .ok { color: #1a7f37; }
+      .fail { color: #c62828; font-weight: 600; }
+      pre { white-space: pre-wrap; }
+    </style>
+    <script type="module" src="tests.js"></script>
+  </head>
+  <body>
+    <h1>Installer tests</h1>
+    <p>Needs <code>tools/make_test_fixtures.py</code> first. With <code>?upload=1</code> and
+      <code>tools/dev_server.py --upload-dir</code>, the sparse pieces go to the server for
+      <code>tools/check_pieces.py</code>.</p>
+    <p id="summary">Running…</p>
+    <pre id="out"></pre>
+  </body>
+</html>

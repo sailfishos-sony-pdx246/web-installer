@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: Johannes Meyer zum Alten Borgloh
+# SPDX-License-Identifier: BSD-3-Clause
+
+# Licensing for files that cannot carry a header. Every other file has its own
+# SPDX header: code is BSD-3-Clause, documentation CC-BY-SA-4.0.
+
+version = 1
+SPDX-PackageName = "Sailfish OS web installer for the Sony Xperia 10 VI (pdx246)"
+SPDX-PackageSupplier = "Johannes Meyer zum Alten Borgloh"
+SPDX-PackageDownloadLocation = "NOASSERTION"
+
+# Empty marker that tells GitHub Pages to serve the files as they are.
+[[annotations]]
+path = ".nojekyll"
+SPDX-FileCopyrightText = "Johannes Meyer zum Alten Borgloh"
+SPDX-License-Identifier = "BSD-3-Clause"

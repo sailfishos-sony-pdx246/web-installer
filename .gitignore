@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: Johannes Meyer zum Alten Borgloh
+# SPDX-License-Identifier: BSD-3-Clause
+
+# test data: generated fixtures and links to local release files
+test/fixtures/
+__pycache__/
