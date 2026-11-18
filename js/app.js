@@ -13,6 +13,7 @@ import { Connection, MODE_LABELS } from "./connection.js";
 import { Installer, StepError, zipImage, fileImage, describeOp } from "./steps.js";
 import { pdx246 as profile, preflight } from "./device-pdx246.js";
 import { Cues, store } from "./cues.js";
+import * as stock from "./stock.js";
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -29,9 +30,19 @@ const TUNING = {
 const cues = new Cues();
 
 const LINEAGE_NEEDS = {
+  stock: [],
   install: [],
   again: ["boot.img", "vendor_boot.img", "dtbo.img"],
   back: ["boot.img", "vendor_boot.img", "dtbo.img", "recovery.img", "vendor_dlkm.img"],
+};
+
+const INSTALL_INTRO = {
+  stock:
+    "This takes about half an hour. Do not unplug the phone or close this page. The phone restarts four to five " +
+    "times; the first time it restarts into fastbootd, the browser asks you to choose the phone again.",
+  default:
+    "This takes about ten minutes. Do not unplug the phone or close this page. The phone restarts twice during " +
+    "the installation; the first time it restarts into fastbootd, the browser asks you to choose the phone again.",
 };
 
 const SCREENS = {
@@ -45,6 +56,10 @@ const state = {
   sailfishOverride: false,
   lineage: new Map(), // name -> { file, image, known }
   lineageOverride: false,
+  lineageZip: null, // { file, pkg, release, sha256 }
+  lineageZipOverride: false,
+  unlockCode: "",
+  unlockAck: false,
   busy: false,
   running: false,
 };
@@ -96,7 +111,11 @@ function onActionChange() {
   const needs = LINEAGE_NEEDS[state.action];
   $("lineage-field").hidden = needs.length === 0;
   $("lineage-needs").textContent = needs.join(", ");
+  $("lineage-zip-field").hidden = state.action !== "stock";
+  $("unlock-field").hidden = state.action !== "stock";
+  $("install-intro").textContent = INSTALL_INTRO[state.action] || INSTALL_INTRO.default;
   renderLineage();
+  if (conn && conn.connected) identify();
   updateReady();
 }
 
@@ -275,6 +294,72 @@ function sailfishReady() {
   return !!s && (!!s.release || state.sailfishOverride);
 }
 
+// ---------------------------------------------------------------- LineageOS zip (from Sony's Android)
+
+async function onLineageZipChosen(file) {
+  state.lineageZip = null;
+  state.lineageZipOverride = false;
+  $("lineage-zip-override").hidden = true;
+  $("lineage-zip-override-box").checked = false;
+  if (!file) {
+    setStatus("lineage-zip-status", "", "");
+    updateReady();
+    return;
+  }
+  state.busy = true;
+  updateReady();
+  const t0 = performance.now();
+  try {
+    const r = await stock.checkLineageZip(file, profile, (text) => setStatus("lineage-zip-status", "work", escapeHtml(text)));
+    state.lineageZip = { file, ...r };
+    const secs = Math.round((performance.now() - t0) / 1000);
+    log(`lineage zip: ${file.name}, ${formatSize(file.size)}, sha256 ${r.sha256}${r.release ? ` (release ${r.release.tag})` : " (unknown)"}`);
+    log(`lineage zip: all ${r.pkg.partitions.size} partitions unpack to their checksums (${secs} s)`);
+    if (r.release) {
+      setStatus(
+        "lineage-zip-status",
+        "good",
+        `LineageOS release <strong>${escapeHtml(r.release.tag)}</strong>: the checksum matches the published one, and every partition in it unpacks correctly.`,
+      );
+    } else {
+      setStatus(
+        "lineage-zip-status",
+        "warn",
+        `This zip is not the LineageOS release this page knows (SHA-256 <code>${r.sha256.slice(0, 16)}…</code>), though every partition in it unpacks correctly. Sailfish OS is built for ${escapeHtml(profile.lineage.tag)}.`,
+      );
+      $("lineage-zip-override").hidden = false;
+    }
+  } catch (e) {
+    setStatus("lineage-zip-status", "bad", escapeHtml(e.message));
+    log(`lineage zip: ${e.message}`);
+  } finally {
+    state.busy = false;
+    updateReady();
+  }
+}
+
+function lineageZipReady() {
+  if (state.action !== "stock") return true;
+  const z = state.lineageZip;
+  return !!z && (!!z.release || state.lineageZipOverride);
+}
+
+// The unlock code is needed only if the connected phone's bootloader is locked.
+function onUnlockInput() {
+  const code = stock.normalizeUnlockCode($("unlock-input").value);
+  state.unlockCode = profile.stock.unlockCode.test(code) ? code : "";
+  if (!code) setStatus("unlock-status", "", "");
+  else if (state.unlockCode) setStatus("unlock-status", "good", "The code has the right form.");
+  else setStatus("unlock-status", "warn", "Sony's code has 16 characters, digits and the letters A to F.");
+  state.unlockAck = $("unlock-ack-box").checked;
+  updateReady();
+}
+
+function unlockReady() {
+  if (state.action !== "stock" || !conn || conn.locked !== true) return true;
+  return !!state.unlockCode && state.unlockAck;
+}
+
 // ---------------------------------------------------------------- connecting
 
 function describeConnection() {
@@ -294,21 +379,50 @@ function describeConnection() {
 }
 
 async function identify() {
-  if (conn.mode !== "bootloader") return;
+  if (conn.mode !== "bootloader" || identifying) return;
+  identifying = true;
   try {
     const fb = conn.fb;
     const product = await fb.tryGetVar("product");
     const baseband = await fb.tryGetVar("version-baseband");
     const bootloader = await fb.tryGetVar("version-bootloader");
-    log(`found ${product}, baseband ${baseband}, bootloader ${bootloader}`);
-    conn.info = profile.products.includes(product)
+    const secure = await fb.tryGetVar("secure");
+    const unlocked = await fb.tryGetVar("unlocked");
+    log(`found ${product}, baseband ${baseband}, bootloader ${bootloader}, secure ${secure}, unlocked ${unlocked}`);
+    conn.locked = unlocked === "no" || (unlocked === null && secure === "yes");
+    let info = profile.products.includes(product)
       ? `Model ${product} (${profile.name}).`
       : `It reports itself as “${product}”, which is not an ${profile.name}.`;
+    if (state.action === "stock") {
+      // getvar:all also gives the active slot (its lines are not logged: they hold the serial number).
+      const all = await fb.getVarAll();
+      const slot = (all.get("current-slot") || "").replace(/^_/, "");
+      log(`active slot ${slot || "unknown"}`);
+      info += ` Firmware ${baseband}, slot ${slot || "?"} active.`;
+      if (!stock.firmwareAtLeast(baseband, profile.stock.minFirmware)) {
+        info += ` LineageOS needs firmware ${profile.stock.minFirmware.join(".")} or newer: install Sony's updates first.`;
+      }
+      info += conn.locked
+        ? " The bootloader is locked: enter Sony's unlock code in step 2."
+        : " The bootloader is unlocked.";
+      if (conn.locked && slot === "b") {
+        info +=
+          " Sony's Android runs from slot b, so whether slot a holds firmware new enough can only be checked after " +
+          "unlocking. If it does not, this page cannot install yet.";
+      }
+    } else if (conn.locked) {
+      info += " Its bootloader is locked.";
+    }
+    conn.info = info;
   } catch (e) {
     conn.info = `Could not read the model: ${e.message}`;
+  } finally {
+    identifying = false;
   }
   describeConnection();
+  updateReady();
 }
+let identifying = false;
 
 function connectAdvice(e) {
   if (e.name === "NotFoundError") return "No phone was chosen. Is it in fastboot mode and plugged in?";
@@ -488,7 +602,50 @@ function onWaitConnectClick() {
 
 // ---------------------------------------------------------------- the installation
 
+// From Sony's Android: the phone's checks and the unlock, LineageOS from its zip to slot a
+// (boot images in the bootloader, the dynamic partitions in its fastbootd), then the steps of
+// the Sailfish OS zip as for a phone with LineageOS.
+function stockSteps() {
+  const steps = [];
+  const ctx = { unlockCode: state.unlockCode };
+  const pkg = state.lineageZip.pkg;
+  steps.push({ title: "Check the phone and its firmware", run: (inst) => stock.checkStockPhone(inst, ctx) });
+  steps.push({ title: "Unlock the bootloader (if it is locked)", run: (inst) => stock.unlockBootloader(inst, ctx) });
+  steps.push({ title: "Check the firmware of slot a", run: (inst) => stock.checkSlotA(inst, ctx) });
+  for (const [src, dst] of profile.stock.physical) {
+    const p = pkg.partition(src);
+    steps.push({
+      title: `Write ${dst} (LineageOS ${src}, ${formatSize(p.size)})`,
+      lineageWrite: true,
+      run: (inst) => inst.flash(dst, p.image(`LineageOS ${src}`)),
+    });
+  }
+  steps.push({ title: "Make slot a active", run: (inst) => inst.device().command("set_active:a") });
+  steps.push({ title: "Restart into LineageOS's fastbootd and check the phone", run: (inst) => stock.enterFastbootd(inst) });
+  steps.push({ title: "Replace the partition table of super", run: (inst) => stock.replaceSuper(inst, pkg) });
+  const group = pkg.manifest.dynamic.groups.find((g) => g.name === profile.stock.group);
+  for (const name of group.partitions) {
+    const p = pkg.partition(name);
+    steps.push({
+      title: `Write ${name}_a (LineageOS ${name}, ${formatSize(p.size)})`,
+      run: (inst) => inst.flash(`${name}_a`, p.image(`LineageOS ${name}`)),
+    });
+  }
+  steps.push({ title: "Restart into the bootloader", run: (inst) => inst.rebootTo("bootloader") });
+  const { config, plan, images } = state.sailfish;
+  steps.push({ title: "Check the phone for Sailfish OS", run: (inst) => inst.checkPhone(config.products, plan.checks) });
+  for (const op of plan.ops) {
+    steps.push({
+      title: describeOp(op, images, profile),
+      sailfishBoot: op.kind === "flash" && op.partition === "boot_a",
+      run: (inst) => inst.runOp(op, images),
+    });
+  }
+  return steps;
+}
+
 function buildSteps() {
+  if (state.action === "stock") return stockSteps();
   const steps = [];
   const action = state.action;
   const lineage = (name) => state.lineage.get(name).image;
@@ -556,6 +713,20 @@ function failureAdvice(e, steps, index) {
   const wroteSailfishBoot = steps.slice(0, index + 1).some((s) => s.sailfishBoot && s.el.className !== "pending");
   const lines = [];
   if (e.advice) lines.push(e.advice);
+  if (state.action === "stock") {
+    // Every run of this flow writes LineageOS's boot images first, so it can always start over.
+    const wroteSomething = steps.slice(0, index + 1).some((s) => s.lineageWrite && s.el.className !== "pending");
+    if (e.kind === "usb" || e.kind === "timeout") lines.push("The USB connection to the phone was lost.");
+    if (e.kind === "access") lines.push(connectAdvice(e));
+    if (wroteSomething) {
+      lines.push(
+        "Sony's Android is partly replaced now. Switch the phone off, start it in fastboot mode again (hold volume up " +
+          "while plugging in), click Connect and start this installation again: it writes everything once more.",
+      );
+    }
+    if (!lines.length) lines.push("Start the phone in fastboot mode again, click Connect and start again.");
+    return lines;
+  }
   if (e.kind === "usb" || e.kind === "timeout") {
     lines.push(
       "The USB connection to the phone was lost. Unplug it, start it in fastboot mode again " +
@@ -580,7 +751,11 @@ async function onStartClick() {
   const warning =
     state.action === "back"
       ? "Going back to LineageOS replaces Sailfish OS. Its data is lost: you format the data afterwards. Continue?"
-      : "Installing Sailfish OS erases all data on the phone. Continue?";
+      : state.action === "stock"
+        ? "This replaces Sony's Android with LineageOS 23.2 and Sailfish OS and erases all data on the phone." +
+          (conn.locked ? " Unlocking the bootloader removes Sony's DRM keys for good and ends Sony's updates." : "") +
+          " Continue?"
+        : "Installing Sailfish OS erases all data on the phone. Continue?";
   if (!window.confirm(warning)) return;
 
   const steps = buildSteps();
@@ -681,17 +856,21 @@ async function onRebootClick() {
 // ---------------------------------------------------------------- readiness
 
 function updateReady() {
-  const filesOk = sailfishReady() && lineageReady();
+  const filesOk = sailfishReady() && lineageReady() && lineageZipReady();
   const connected = conn && conn.connected && conn.mode === "bootloader";
-  $("start-btn").disabled = state.busy || state.running || !filesOk || !connected;
+  const unlockOk = unlockReady();
+  $("start-btn").disabled = state.busy || state.running || !filesOk || !connected || !unlockOk;
   $("connect-btn").disabled = state.running || !usb;
-  for (const el of document.querySelectorAll('input[name="action"], #zip-input, #lineage-input')) {
+  for (const el of document.querySelectorAll(
+    'input[name="action"], #zip-input, #lineage-input, #lineage-zip-input, #unlock-input, #unlock-ack-box',
+  )) {
     el.disabled = state.running;
   }
   let why = "";
   if (!state.running) {
     if (!filesOk) why = "Choose the files first (step 2).";
     else if (!connected) why = "Connect the phone in fastboot mode first (step 3).";
+    else if (!unlockOk) why = "The bootloader is locked: enter Sony's unlock code and confirm (step 2).";
   }
   $("start-why").textContent = why;
 }
@@ -711,6 +890,18 @@ async function setupMock() {
     latency: Number(params.get("usbLatency") || 0),
     resetPermissions: params.has("mockReset"),
     lineageBootSha256: profile.lineage.images["boot.img"].sha256,
+    // A phone with Sony's Android (?stock=1), and how it is set up.
+    stock: params.has("stock"),
+    stockSlot: params.get("stockSlot") || "b",
+    unlocked: params.has("unlocked"),
+    fwA: params.get("fwA") || undefined,
+    fwB: params.get("fwB") || undefined,
+    oemUnlock: params.get("oemUnlock") || "on",
+    unlockCode: params.get("unlockCode") || undefined,
+    unlockReboots: params.has("unlockReboots"),
+    fastbootdMax: Number(params.get("fastbootdMax")) || undefined,
+    // SHA-256 of further boot images that count as LineageOS's (a test zip's).
+    lineageBoots: (params.get("lineageBoot") || "").split(",").filter(Boolean),
   });
   usb = mock.usb;
   window.__mock = mock;
@@ -735,6 +926,8 @@ async function loadTestFiles() {
     for (const name of Object.keys(profile.lineage.images)) files.push(await RangeFile.open(`${lineage}/${name}`));
     await onLineageChosen(files);
   }
+  const lineageZip = params.get("testlineagezip");
+  if (lineageZip) await onLineageZipChosen(await RangeFile.open(lineageZip));
 }
 
 // ---------------------------------------------------------------- start
@@ -784,6 +977,13 @@ async function main() {
     state.lineageOverride = e.target.checked;
     updateReady();
   });
+  $("lineage-zip-input").addEventListener("change", (e) => onLineageZipChosen(e.target.files[0] || null));
+  $("lineage-zip-override-box").addEventListener("change", (e) => {
+    state.lineageZipOverride = e.target.checked;
+    updateReady();
+  });
+  $("unlock-input").addEventListener("input", onUnlockInput);
+  $("unlock-ack-box").addEventListener("change", onUnlockInput);
   $("connect-btn").addEventListener("click", onConnectClick);
   $("wait-connect").addEventListener("click", onWaitConnectClick);
   $("wait-stop").addEventListener("click", () =>

@@ -122,7 +122,8 @@ export class Installer {
 
   async flashOnce(partition, image) {
     const fb = this.device();
-    const sparse = parseSparseHeader(await readHead(image, 28));
+    // A payload partition (image.chunks) is never a sparse file itself.
+    const sparse = image.chunks ? null : parseSparseHeader(await readHead(image, 28));
     const expanded = sparse ? sparse.totalBlocks * sparse.blockSize : image.size;
 
     // Host fastboot resizes a logical partition to the image size before writing it
@@ -132,6 +133,7 @@ export class Installer {
     }
 
     const limit = await this.downloadLimit();
+    if (image.chunks && image.size > limit) return this.flashChunks(partition, image, limit);
     const crc = image.crc32 != null ? new Crc32() : null;
     let stream = await image.open();
     if (crc) stream = stream.pipeThrough(tap(crc));
@@ -171,6 +173,39 @@ export class Installer {
     } finally {
       await reader.cancel();
     }
+  }
+
+  // A payload partition larger than one download: sparse pieces built from its chunks, in
+  // which blocks of one repeated value are FILL chunks and cost no transfer time. Progress
+  // counts partition bytes.
+  async flashChunks(partition, image, limit) {
+    const fb = this.device();
+    const bs = image.blockSize;
+    let n = 0;
+    let doneBytes = 0;
+    let sent = 0;
+    const layout = { blockSize: bs, totalBlocks: image.totalBlocks };
+    for await (const piece of splitSparse(null, layout, limit, image.chunks())) {
+      n++;
+      const spanStart = doneBytes;
+      const span = piece.endBlock * bs - spanStart;
+      this.log(`   ${image.name}: part ${n}, ${formatSize(piece.size)} for ${formatSize(span)} of the partition`);
+      await fb.download(piece.parts, piece.size, (s) =>
+        this.progress(Math.min(spanStart + Math.round((span * s) / piece.size), image.size), image.size),
+      );
+      sent += piece.size;
+      doneBytes = piece.endBlock * bs;
+      await fb.command(`flash:${partition}`, { timeoutMs: FLASH_TIMEOUT });
+    }
+    this.log(`   ${image.name}: ${formatSize(image.size)} written with ${formatSize(sent)} sent`);
+  }
+
+  // fastbootd: replaces the table of the super partition with `table` (an empty table, as
+  // super_empty.img), dropping every logical partition.
+  async updateSuper(table) {
+    const fb = this.device("fastbootd");
+    await fb.download([table], table.length);
+    await fb.command("update-super:super:wipe", { timeoutMs: 60000 });
   }
 
   // product (against VALID_PRODUCTS) and the getvar_fail_if checks, before anything changes.

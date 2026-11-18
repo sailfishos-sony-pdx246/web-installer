@@ -54,16 +54,61 @@ export const pdx246 = {
   ],
 
   // LineageOS 23.2 release the Sailfish OS images are built for; its images are needed to
-  // install again over Sailfish OS and to go back (INSTALL.md sections 4 and 5).
+  // install again over Sailfish OS and to go back (INSTALL.md sections 4 and 5), and its OTA
+  // zip to install from Sony's Android.
   lineage: {
     tag: "v23.2-20260924",
     url: "https://github.com/johanneszab/lineageos-pdx246-releases/releases/tag/v23.2-20260924",
+    // LineageOS 23.2 is Android 16; an OTA zip of another Android version is refused.
+    sdkLevel: "36",
+    zips: [
+      {
+        tag: "v23.2-20260924",
+        file: "lineage-23.2-20260924-UNOFFICIAL-pdx246.zip",
+        size: 1394134959,
+        sha256: "1808691f97a66ec959f0978002d86284980542a3628bcc8f6ba0f30400fe9eb4",
+      },
+    ],
     images: {
       "boot.img": { size: 100663296, sha256: "c9f9f9aeb15a89ee6827c377d595c99a3583f4a87c5cecd4c4572d2c2586c93f" },
       "vendor_boot.img": { size: 100663296, sha256: "e2bed09884588f46ac104e1217fa7fa73e8e17b6cb31b54f0a69e1a233408caf" },
       "dtbo.img": { size: 25165824, sha256: "6bfe5ecaea11cc107b5f0638294bb2d140ddf49d2d063f8a6252ce5e491acebc" },
       "vendor_dlkm.img": { size: 69554176, sha256: "1737d196093af5dd9b9d91defa3ef61f74cfc25062679693513aa362e185ec5e" },
       "recovery.img": { size: 104857600, sha256: "caf9215e86d0d324ee9fbade19e752671c01c9385d92e4d28d9ed80b97dab9f4" },
+    },
+  },
+
+  // Installing from Sony's Android: LineageOS's OTA zip is written straight to slot a, the
+  // way a build's images are flashed with fastboot (no recovery, no sideload).
+  stock: {
+    // The LineageOS release notes ask for Sony's firmware 70.2.A or newer; the bootloader
+    // reports it as version-baseband ("70.2.A.4.22").
+    minFirmware: [70, 2],
+    // Sony's unlock code: 16 hexadecimal digits, which developer.sony.com gives for the IMEI.
+    unlockCode: /^[0-9A-F]{16}$/,
+    unlockCommand: (code) => `oem unlock 0x${code}`,
+    // From the payload: these in the bootloader, ...
+    physical: [
+      ["boot", "boot_a"],
+      ["vendor_boot", "vendor_boot_a"],
+      ["dtbo", "dtbo_a"],
+      ["recovery", "recovery_a"],
+      ["vbmeta", "vbmeta_a"],
+      ["vbmeta_system", "vbmeta_system_a"],
+    ],
+    // ... and the dynamic partitions in fastbootd, in this group, after the table of super
+    // has been replaced by the build's empty one.
+    group: "somc_dynamic_partitions",
+    logical: ["system", "vendor", "vendor_dlkm", "system_ext", "odm", "product"],
+    // The table as the pdx246 build writes it (BoardConfig.mk, build_super_image.py), checked
+    // against the LineageOS build's own super.img.
+    superLayout: {
+      deviceSize: 17179869184,
+      metadataMaxSize: 65536,
+      metadataSlots: 3,
+      blockSize: 4096,
+      alignment: 1 * MiB,
+      virtualAb: true,
     },
   },
 

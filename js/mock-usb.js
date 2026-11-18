@@ -7,10 +7,16 @@
 // bootloader's FAIL for long getvar names and the lost answer to reboot-fastboot), and
 // records what is written. For sparse images it computes the same content digest as
 // tools/sparse_digest.py, so a test can compare the result with the image files.
+//
+// With `stock`, it is a phone with Sony's Android as sold: a locked bootloader that refuses
+// to write or switch slots until Sony's unlock command, Sony's partitions in super, Sony's
+// recovery (no fastbootd), and the active slot and each slot's firmware as given. What the
+// real bootloader does there is partly assumed (see the README).
 
 import { BlockDigest, parseSparseHeader, CHUNK_RAW, CHUNK_FILL } from "./sparse.js";
 import { Sha256 } from "./sha256.js";
 import { concatBytes, sleep } from "./bytes.js";
+import { parseSuperImage } from "./lp-metadata.js";
 
 const MiB = 1024 * 1024;
 
@@ -20,17 +26,9 @@ const IDENTITIES = {
   fastbootd: { vendorId: 0x18d1, productId: 0x4ee0, manufacturerName: "Sony", productName: "XQ-ES54" },
 };
 
-const BOOTLOADER_VARS = {
-  product: "XQ-ES54",
-  secure: "no",
-  unlocked: "yes",
-  "version-baseband": "70.2.A.4.22",
-  "version-bootloader": "6450-0001_X_Boot_SM6450_LA2.0_U_18",
-};
-
 const PHYSICAL = [
   "boot_a", "boot_b", "vendor_boot_a", "vendor_boot_b", "dtbo_a", "dtbo_b", "recovery_a", "recovery_b",
-  "vbmeta_a", "vbmeta_b", "userdata", "super", "metadata", "misc",
+  "vbmeta_a", "vbmeta_b", "vbmeta_system_a", "vbmeta_system_b", "userdata", "super", "metadata", "misc",
 ];
 
 function domError(name, message) {
@@ -157,15 +155,23 @@ export class MockPhone {
     this.lostReply = options.lostReply ?? true;
     this.writeSpeed = options.writeSpeed ?? 400e6;
     this.latency = options.latency || 0;
-    this.lineageBootSha256 = options.lineageBootSha256 || null;
+    this.lineageBoots = new Set([options.lineageBootSha256, ...(options.lineageBoots || [])].filter(Boolean));
+    this.fastbootdMax = options.fastbootdMax || 256 * MiB;
+    const stock = !!options.stock;
+    const fw = (s) => ({ baseband: s, bootloader: "6450-0001_X_Boot_SM6450_LA2.0_U_18" });
     this.state = {
-      slot: "a",
-      bootA: options.bootA || "lineage",
+      stock,
+      locked: stock && !options.unlocked,
+      oemUnlock: options.oemUnlock !== "off",
+      unlockCode: (options.unlockCode || "0123456789ABCDEF").toUpperCase(),
+      unlockReboots: !!options.unlockReboots,
+      slot: stock ? options.stockSlot || "b" : "a",
+      firmware: { a: fw(options.fwA || "70.2.A.4.22"), b: fw(options.fwB || "70.2.A.4.22") },
+      // What boot and recovery of each slot hold: stock, lineage or sailfish.
+      boot: { a: stock ? "stock" : options.bootA || "lineage", b: stock ? "stock" : "none" },
+      recovery: { a: stock ? "stock" : "lineage", b: stock ? "stock" : "none" },
       merge: options.merge || "none",
-      logical: {
-        system_a: 1200 * MiB, system_ext_a: 300 * MiB, product_a: 600 * MiB,
-        vendor_a: 900 * MiB, vendor_dlkm_a: 69554176, odm_a: 4 * MiB,
-      },
+      ...initialSuper(stock ? options.stockSlot || "b" : "a", stock),
     };
     this.dev = null;
     this.where = "off";
@@ -216,42 +222,77 @@ export class MockPhone {
       return;
     }
     const cmd = new TextDecoder().decode(data);
-    this.commands.push(`${dev.mode}: ${cmd}`);
+    this.commands.push(`${dev.mode}: ${cmd.startsWith("oem unlock") ? "oem unlock (code)" : cmd}`);
     await this.command(dev, cmd);
   }
 
+  bootloaderVars() {
+    const s = this.state;
+    const f = s.firmware[s.slot];
+    return {
+      product: "XQ-ES54",
+      secure: s.locked ? "yes" : "no",
+      unlocked: s.locked ? "no" : "yes",
+      "version-baseband": f.baseband,
+      "version-bootloader": f.bootloader,
+    };
+  }
+
   getvar(mode, name) {
+    const s = this.state;
     if (mode === "bootloader") {
-      if (name in BOOTLOADER_VARS) return "OKAY" + BOOTLOADER_VARS[name];
+      const vars = this.bootloaderVars();
+      if (name in vars) return "OKAY" + vars[name];
       return `FAIL${name.slice(0, 10)} not supported`;
     }
-    const s = this.state;
     if (name === "is-userspace") return "OKAYyes";
     if (name === "current-slot") return "OKAY" + s.slot;
     if (name === "snapshot-update-status") return "OKAY" + s.merge;
-    if (name === "max-download-size") return "OKAY0x10000000";
+    if (name === "max-download-size") return "OKAY0x" + this.fastbootdMax.toString(16);
     if (name === "product") return "OKAYpdx246";
     if (name === "secure") return "OKAYno";
+    if (name === "partition-size:super") return "OKAY0x" + SUPER_SIZE.toString(16).toUpperCase();
     if (name.startsWith("is-logical:")) {
       const p = name.slice(11);
-      if (p in s.logical) return "OKAYyes";
+      if (s.logical.has(p)) return "OKAYyes";
       if (PHYSICAL.includes(p)) return "OKAYno";
       return "FAILNo such partition.";
     }
     return "FAILVariable not implemented.";
   }
 
+  // Sony's bootloader answers getvar:all with one INFO line per variable, the serial number
+  // among them; it is also where it reports the active slot.
+  getvarAll(dev) {
+    const s = this.state;
+    const lines = Object.entries(this.bootloaderVars()).map(([k, v]) => `${k}:${v}`);
+    lines.push(`serialno:${dev.serialNumber}`, `current-slot:${s.slot}`, "slot-count:2");
+    for (const x of ["a", "b"]) {
+      lines.push(`slot-successful:${x}:${x === s.slot ? "yes" : "no"}`, `slot-unbootable:${x}:no`, `slot-retry-count:${x}:7`);
+    }
+    lines.push("partition-size:boot_a:0x6000000", "partition-type:userdata:f2fs");
+    for (const l of lines) dev.answer("INFO" + l);
+    dev.answer("OKAY");
+  }
+
   async command(dev, cmd) {
+    const s = this.state;
     const colon = cmd.indexOf(":");
     const name = colon < 0 ? cmd : cmd.slice(0, colon);
     const arg = colon < 0 ? "" : cmd.slice(colon + 1);
     const fastbootd = dev.mode === "fastbootd";
+    if (cmd.startsWith("oem unlock")) return this.oemUnlock(dev, cmd.slice(10).trim());
+    if (s.locked && ["flash", "erase", "set_active", "update-super", "resize-logical-partition"].includes(name)) {
+      return dev.answer(name === "set_active" ? "FAILSlot Change is not allowed in Lock State" : "FAILFlashing is not allowed in Lock State");
+    }
     switch (name) {
       case "getvar":
+        if (arg === "all") return this.getvarAll(dev);
         return dev.answer(this.getvar(dev.mode, arg));
       case "download": {
         const size = parseInt(arg, 16);
-        if (!(size > 0) || size > 256 * MiB) return dev.answer("FAILRequested download size is more than max allowed");
+        const max = fastbootd ? this.fastbootdMax : 256 * MiB;
+        if (!(size > 0) || size > max) return dev.answer("FAILRequested download size is more than max allowed");
         this.download = { size, received: 0, chunks: [] };
         return dev.answer("DATA" + arg);
       }
@@ -259,15 +300,21 @@ export class MockPhone {
         return this.flash(dev, arg);
       case "set_active":
         if (arg !== "a" && arg !== "b") return dev.answer("FAILInvalid slot");
-        this.state.slot = arg;
+        s.slot = arg;
         return dev.answer("OKAY");
-      case "resize-logical-partition": {
+      case "resize-logical-partition":
         if (!fastbootd) return dev.answer("FAILunknown command");
-        const [p, size] = arg.split(":");
-        if (!(p in this.state.logical)) return dev.answer("FAILNo such partition.");
-        this.state.logical[p] = Number(size);
-        return dev.answer("OKAY");
-      }
+        return this.resize(dev, arg);
+      case "update-super":
+        if (!fastbootd) return dev.answer("FAILunknown command");
+        return this.updateSuper(dev, arg);
+      case "snapshot-update":
+        if (!fastbootd) return dev.answer("FAILunknown command");
+        if (arg === "cancel") {
+          s.merge = "none";
+          return dev.answer("OKAYSuccess");
+        }
+        return dev.answer("FAILInvalid parameter to snapshot-update");
       case "erase":
         return dev.answer("OKAY");
       case "reboot":
@@ -281,15 +328,79 @@ export class MockPhone {
     }
   }
 
+  oemUnlock(dev, arg) {
+    const s = this.state;
+    if (dev.mode !== "bootloader") return dev.answer("FAILunknown command");
+    if (!s.locked) return dev.answer("FAILDevice already unlocked");
+    if (!s.oemUnlock) return dev.answer("FAILUnlock not allowed");
+    if (arg.replace(/^0x/i, "").toUpperCase() !== s.unlockCode) return dev.answer("FAILIncorrect unlock code");
+    s.locked = false;
+    dev.answer("OKAY");
+    if (s.unlockReboots) {
+      this.later(300, () => {
+        this.unplug();
+        this.where = "restarting";
+        this.later(3000, () => this.plugIn("bootloader"));
+      });
+    }
+  }
+
+  // fastbootd's update-super: the downloaded table, checked as liblp checks it, replaces
+  // the one of super (only with "wipe", the way this page uses it).
+  updateSuper(dev, arg) {
+    const s = this.state;
+    const buf = this.buffer;
+    this.buffer = null;
+    const [part, wipe] = arg.split(":");
+    if (!buf) return dev.answer("FAILNo data available");
+    if (part !== "super") return dev.answer(`FAILCannot find ${part}`);
+    if (wipe !== "wipe") return dev.answer("FAILupdate-super without wipe is not simulated");
+    let t;
+    try {
+      t = parseSuperImage(concatBytes(buf.chunks, buf.size));
+    } catch (e) {
+      return dev.answer(`FAILData is not a valid logical partition metadata image (${e.message})`);
+    }
+    const sup = t.blockDevices[0];
+    if (sup.name !== "super" || sup.size !== SUPER_SIZE) {
+      return dev.answer(`FAILBlock device super size mismatch (expected ${sup.size}, got ${SUPER_SIZE})`);
+    }
+    s.table = t;
+    s.groups = new Map(t.groups.map((g) => [g.name, g.maxSize]));
+    s.logical = new Map(t.partitions.map((p) => [p.name, { size: p.size, group: p.group }]));
+    return dev.answer("OKAYSuccessfully flashed partition table");
+  }
+
+  resize(dev, arg) {
+    const s = this.state;
+    const [p, sizeText] = arg.split(":");
+    const size = Number(sizeText);
+    const part = s.logical.get(p);
+    if (!part) return dev.answer("FAILNo such partition.");
+    if (s.merge !== "none") return dev.answer("FAILCannot resize while a snapshot update is in progress");
+    let group = 0;
+    let total = 0;
+    for (const [name, q] of s.logical) {
+      const n = name === p ? size : q.size;
+      total += n;
+      if (q.group === part.group) group += n;
+    }
+    const max = s.groups.get(part.group) || 0;
+    if ((max && group > max) || total > SUPER_SIZE - MiB) return dev.answer("FAILNot enough space to resize partition");
+    part.size = size;
+    return dev.answer("OKAYPartition resized");
+  }
+
   async flash(dev, p) {
+    const s = this.state;
     const buf = this.buffer;
     this.buffer = null;
     if (!buf) return dev.answer("FAILNo data downloaded");
-    const logical = p in this.state.logical;
+    const logical = s.logical.has(p);
     if (logical && dev.mode !== "fastbootd") return dev.answer("FAILPartition not found");
     if (!logical && !PHYSICAL.includes(p)) return dev.answer("FAILPartition not found");
-    if (dev.mode === "fastbootd" && p === "userdata" && this.state.merge !== "none") {
-      return dev.answer("FAILCannot flash userdata while a snapshot update is pending");
+    if (dev.mode === "fastbootd" && (logical || p === "userdata") && s.merge !== "none") {
+      return dev.answer(`FAILCannot flash ${p} while a snapshot update is in progress`);
     }
     const data = concatBytes(buf.chunks, buf.size);
     buf.chunks.length = 0;
@@ -297,7 +408,7 @@ export class MockPhone {
       const sparse = parseSparseHeader(data);
       if (sparse) {
         const bytes = sparse.totalBlocks * sparse.blockSize;
-        if (logical && bytes > this.state.logical[p]) return dev.answer("FAILImage is too large for the partition");
+        if (logical && bytes > s.logical.get(p).size) return dev.answer("FAILImage is too large for the partition");
         let rec = this.written[p];
         if (!rec || rec.kind !== "sparse" || firstDataBlock(data) < rec.digest.next) {
           rec = { kind: "sparse", digest: new BlockDigest(sparse.blockSize), pieces: 0, totalBlocks: sparse.totalBlocks };
@@ -307,10 +418,12 @@ export class MockPhone {
         rec.digest.applySparse(data);
         rec.pieces++;
       } else {
-        if (logical && data.length > this.state.logical[p]) return dev.answer("FAILImage is too large for the partition");
+        if (logical && data.length > s.logical.get(p).size) return dev.answer("FAILImage is too large for the partition");
         const sha = new Sha256().update(data).hex();
         this.written[p] = { kind: "raw", sha256: sha, size: data.length, pieces: 1 };
-        if (p === "boot_a") this.state.bootA = sha === this.lineageBootSha256 ? "lineage" : "sailfish";
+        const m = /^(boot|recovery)_([ab])$/.exec(p);
+        if (m && m[1] === "boot") s.boot[m[2]] = this.lineageBoots.has(sha) ? "lineage" : "sailfish";
+        if (m && m[1] === "recovery") s.recovery[m[2]] = "lineage"; // only LineageOS's is ever written
       }
     } catch (e) {
       return dev.answer(`FAILInvalid image: ${e.message}`);
@@ -320,19 +433,23 @@ export class MockPhone {
   }
 
   reboot(dev, target) {
+    const s = this.state;
     const from = dev.mode;
     if (!(target === "fastboot" && from === "bootloader" && this.lostReply)) dev.answer("OKAY");
     this.later(300, () => {
       this.unplug();
+      const boot = s.boot[s.slot];
       if (target === "bootloader") {
         this.where = "restarting";
         this.later(3000, () => this.plugIn("bootloader"));
-      } else if (target === "fastboot" && (from === "fastbootd" || this.state.bootA === "lineage")) {
+      } else if (target === "fastboot" && (from === "fastbootd" || (boot === "lineage" && s.recovery[s.slot] === "lineage"))) {
         this.where = "restarting";
         this.later(6000, () => this.plugIn("fastbootd"));
+      } else if (target === "fastboot" && boot === "lineage") {
+        this.where = "Sony's recovery (no fastbootd)";
       } else {
-        // boot_a holds Sailfish OS (or a normal reboot): the system starts, no fastboot device.
-        this.where = this.state.bootA === "lineage" ? "lineageos" : "sailfishos";
+        // A normal restart, or boot holds Sailfish OS or Sony's Android: no fastboot device.
+        this.where = { lineage: "lineageos", sailfish: "sailfishos", stock: "Sony's Android" }[boot] || "no system";
       }
     });
   }
@@ -350,6 +467,20 @@ export class MockPhone {
     }
     return out;
   }
+}
+
+const SUPER_SIZE = 17179869184;
+
+// The dynamic partitions at the start: LineageOS's on slot a, or Sony's on its active slot.
+function initialSuper(slot, stock) {
+  const sizes = stock
+    ? { system: 1300 * MiB, system_ext: 400 * MiB, product: 900 * MiB, vendor: 1100 * MiB, vendor_dlkm: 60 * MiB, odm: 3 * MiB }
+    : { system: 1200 * MiB, system_ext: 300 * MiB, product: 600 * MiB, vendor: 900 * MiB, vendor_dlkm: 69554176, odm: 4 * MiB };
+  const group = `somc_dynamic_partitions_${slot}`;
+  const logical = new Map();
+  for (const [name, size] of Object.entries(sizes)) logical.set(`${name}_${slot}`, { size, group });
+  const groups = new Map([["default", 0], ["somc_dynamic_partitions_a", 17175674880], ["somc_dynamic_partitions_b", 17175674880]]);
+  return { logical, groups, table: null };
 }
 
 // Like Chrome, the simulation keeps permissions for devices with a serial number across page

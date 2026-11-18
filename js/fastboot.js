@@ -175,13 +175,15 @@ export class FastbootDevice {
   }
 
   // Reads INFO/TEXT lines until OKAY, DATA or FAIL. The timeout restarts with every line.
-  async response(timeoutMs = COMMAND_TIMEOUT) {
+  // INFO lines go to the log, or into `collect` (an array) without being logged.
+  async response(timeoutMs = COMMAND_TIMEOUT, collect = null) {
     for (;;) {
       const text = decoder.decode(await this.readPacket(timeoutMs));
       const status = text.slice(0, 4);
       const payload = text.slice(4);
       if (status === "INFO" || status === "TEXT") {
-        if (payload.trim()) this.log(`(phone) ${payload.trim()}`);
+        if (collect && status === "INFO") collect.push(payload);
+        else if (payload.trim()) this.log(`(phone) ${payload.trim()}`);
         continue;
       }
       if (status === "OKAY") return { status, value: payload };
@@ -193,17 +195,18 @@ export class FastbootDevice {
     }
   }
 
-  // Sends one command and returns its OKAY value. Logs it like host fastboot does.
-  async command(cmd, { timeoutMs = COMMAND_TIMEOUT, quiet = false } = {}) {
+  // Sends one command and returns its OKAY value. Logs it like host fastboot does, or as
+  // `logAs` (for a command that holds a secret).
+  async command(cmd, { timeoutMs = COMMAND_TIMEOUT, quiet = false, logAs = null, collect = null } = {}) {
     this.checkUsable();
     if (this.readOnly && !cmd.startsWith("getvar:")) {
-      throw new FastbootError("refused", `Read-only mode: “${cmd}” was not sent.`);
+      throw new FastbootError("refused", `Read-only mode: “${logAs || cmd}” was not sent.`);
     }
     if (cmd.length > 4096) throw new FastbootError("protocol", "Command too long.");
-    if (!quiet) this.log(`>> ${cmd}`);
+    if (!quiet) this.log(`>> ${logAs || cmd}`);
     await this.write(encoder.encode(cmd));
     try {
-      const r = await this.response(timeoutMs);
+      const r = await this.response(timeoutMs, collect);
       if (!quiet) this.log(`<< ${r.status}${r.value ? " " + r.value : ""}`);
       return r;
     } catch (e) {
@@ -225,6 +228,19 @@ export class FastbootDevice {
       if (e.kind === "fail") return null;
       throw e;
     }
+  }
+
+  // getvar:all, as a Map of name to value ("slot-successful:a" -> "yes"). Its lines are not
+  // logged: they include the serial number.
+  async getVarAll() {
+    const lines = [];
+    await this.command("getvar:all", { collect: lines });
+    const vars = new Map();
+    for (const line of lines) {
+      const i = line.lastIndexOf(":");
+      if (i > 0) vars.set(line.slice(0, i).trim(), line.slice(i + 1).trim());
+    }
+    return vars;
   }
 
   // Sends `size` bytes from `parts` (an iterable or async iterable of Uint8Array).

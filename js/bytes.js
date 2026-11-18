@@ -83,6 +83,35 @@ export async function* readInParts(reader, total, step = 1 << 20) {
   }
 }
 
+// A byte buffer that grows as data is appended (the decompressors' output).
+export class GrowableBytes {
+  constructor(capacity = 65536) {
+    this.buf = new Uint8Array(Math.max(16, capacity));
+    this.length = 0;
+  }
+
+  // Makes room for n more bytes. this.buf may be replaced.
+  reserve(n) {
+    const need = this.length + n;
+    if (need <= this.buf.length) return;
+    let cap = this.buf.length * 2;
+    while (cap < need) cap *= 2;
+    const b = new Uint8Array(cap);
+    b.set(this.buf.subarray(0, this.length));
+    this.buf = b;
+  }
+
+  append(bytes) {
+    this.reserve(bytes.length);
+    this.buf.set(bytes, this.length);
+    this.length += bytes.length;
+  }
+
+  bytes() {
+    return this.buf.subarray(0, this.length);
+  }
+}
+
 export function concatBytes(parts, total) {
   if (total === undefined) total = parts.reduce((s, p) => s + p.length, 0);
   const out = new Uint8Array(total);
@@ -96,6 +125,18 @@ export function concatBytes(parts, total) {
 
 export function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Long computations call this between steps: about every 50 ms it lets the browser draw and
+// handle events and timers. (An await on data that is already there does not.) A plain
+// timeout, not scheduler.yield(): that one resumes ahead of the page's timers, which then
+// wait until the computation ends.
+let lastYield = 0;
+export async function yieldNow() {
+  const now = performance.now();
+  if (now - lastYield < 50) return;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  lastYield = performance.now();
 }
 
 export function formatSize(n) {

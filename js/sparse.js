@@ -125,14 +125,20 @@ async function* rawChunks(h) {
 
 // Splits an image into sparse pieces of at most maxSize bytes.
 // `h` is the input's sparse header (reader positioned after it), or rawImageLayout().
+// `source` instead gives the chunks directly ({ blockSize, totalBlocks } as `h`): an async
+// iterable of FILL chunks and RAW chunks that carry their `data`, in ascending order.
 // Yields { parts: Uint8Array[], size, firstBlock, endBlock }.
-export async function* splitSparse(reader, h, maxSize) {
+export async function* splitSparse(reader, h, maxSize, source = null) {
   const bs = h.blockSize;
   // Room for chunks, keeping space for the file header and a trailing DONT_CARE chunk.
   const budget = maxSize - FILE_HEADER - CHUNK_HEADER;
   if (budget < 2 * CHUNK_HEADER + bs) throw new Error("The download limit is too small.");
 
-  const chunks = h.raw ? rawChunks(h) : sparseChunks(reader, h);
+  const chunks = source ? source[Symbol.asyncIterator]() : h.raw ? rawChunks(h) : sparseChunks(reader, h);
+  // The data of a RAW chunk: from the chunk itself, or the next bytes of the reader.
+  const take = async (item, offset, blocks) =>
+    item.data ? [item.data.subarray(offset * bs, (offset + blocks) * bs)] : reader.readParts(blocks * bs);
+  let lastEnd = 0;
   let piece = { items: [], used: 0, end: 0 };
   let pending = null;
   let emitted = 0;
@@ -153,6 +159,16 @@ export async function* splitSparse(reader, h, maxSize) {
       const next = await chunks.next();
       if (next.done) break;
       item = next.value;
+      if (source) {
+        if (item.start < lastEnd || item.start + item.blocks > h.totalBlocks || !(item.blocks > 0)) {
+          throw new Error("Internal error: chunks out of order.");
+        }
+        if (item.type === CHUNK_RAW && (!item.data || item.data.length !== item.blocks * bs)) {
+          throw new Error("Internal error: chunk data missing.");
+        }
+        lastEnd = item.start + item.blocks;
+        item.offset = 0;
+      }
     }
 
     if (item.type === CHUNK_FILL) {
@@ -165,10 +181,12 @@ export async function* splitSparse(reader, h, maxSize) {
 
     // RAW
     const gap = gapCost(item.start);
+    const offset = item.offset || 0;
     if (piece.used + gap + CHUNK_HEADER + item.blocks * bs <= budget) {
-      item.parts = await reader.readParts(item.blocks * bs);
+      const whole = { type: CHUNK_RAW, start: item.start, blocks: item.blocks };
+      whole.parts = await take(item, offset, item.blocks);
       piece.used += gap + CHUNK_HEADER + item.blocks * bs;
-      piece.items.push(item);
+      piece.items.push(whole);
       piece.end = item.start + item.blocks;
       continue;
     }
@@ -178,11 +196,11 @@ export async function* splitSparse(reader, h, maxSize) {
     const fit = Math.floor(room / bs);
     if (fit >= 1 && (piece.items.length === 0 || room > budget / 8)) {
       const head = { type: CHUNK_RAW, start: item.start, blocks: fit };
-      head.parts = await reader.readParts(fit * bs);
+      head.parts = await take(item, offset, fit);
       piece.used += gap + CHUNK_HEADER + fit * bs;
       piece.items.push(head);
       piece.end = head.start + fit;
-      pending = { type: CHUNK_RAW, start: item.start + fit, blocks: item.blocks - fit };
+      pending = { type: CHUNK_RAW, start: item.start + fit, blocks: item.blocks - fit, data: item.data, offset: offset + fit };
     } else {
       if (piece.items.length === 0) throw new Error("The download limit is too small.");
       pending = item;

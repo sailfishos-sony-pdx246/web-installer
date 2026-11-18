@@ -11,6 +11,11 @@ import { ZipFile } from "../js/zip.js";
 import { parseSparseHeader, splitSparse, rawImageLayout, BlockDigest } from "../js/sparse.js";
 import { parseFlashConfig, planFlashOps } from "../js/flash-config.js";
 import { pdx246 } from "../js/device-pdx246.js";
+import { xzDecompress, crc64 } from "../js/xz.js";
+import { bzip2Decompress } from "../js/bzip2.js";
+import { OtaPackage } from "../js/payload.js";
+import { RangeFile } from "../js/mock-files.js";
+import { buildSuperEmpty, parseSuperImage } from "../js/lp-metadata.js";
 
 const FIX = "fixtures/";
 const params = new URLSearchParams(location.search);
@@ -165,9 +170,261 @@ async function testFlashConfig() {
   check("unsupported operations are refused", badPlan.problems.length === 6, badPlan.problems.join("; "));
 }
 
+async function bytesOf(name) {
+  return new Uint8Array(await (await blob(name)).arrayBuffer());
+}
+
+// Every fixture decompresses to the original; damaged copies are refused.
+async function testDecompressor(kind, decompress, table) {
+  let inBytes = 0;
+  let outBytes = 0;
+  let ms = 0;
+  for (const [name, want] of Object.entries(table)) {
+    const input = await bytesOf(`${kind}/${name}`);
+    let ok = false;
+    let detail = "";
+    try {
+      const t0 = performance.now();
+      const out = decompress(input);
+      ms += performance.now() - t0;
+      inBytes += input.length;
+      outBytes += out.length;
+      ok = out.length === want.size && sha(out) === want.sha256;
+      if (!ok) detail = `${out.length} bytes`;
+    } catch (e) {
+      detail = e.message;
+    }
+    check(`${kind} ${name}`, ok, detail);
+  }
+  check(`${kind} speed`, true, `${(outBytes / 1e6 / (ms / 1000)).toFixed(0)} MB/s out, ${(inBytes / 1e6).toFixed(1)} MB in`);
+
+  // Damage: flip a byte in the middle, cut the end. Both must fail, never return data.
+  // (Only files with a checksum: without one, a changed stored byte cannot be noticed.)
+  const damaged = Object.keys(table).filter((n) => /^(text|mixed|runs)\./.test(n) && !n.includes(".payload."));
+  for (const name of damaged.slice(0, 6)) {
+    const input = await bytesOf(`${kind}/${name}`);
+    const flipped = input.slice();
+    flipped[flipped.length >> 1] ^= 0x10;
+    for (const [what, bad] of [["flipped byte", flipped], ["cut short", input.subarray(0, input.length - 7)]]) {
+      let threw = false;
+      try {
+        decompress(bad);
+      } catch {
+        threw = true;
+      }
+      check(`${kind} ${name}: ${what} is refused`, threw);
+    }
+  }
+  // An output limit is enforced.
+  let limited = false;
+  try {
+    decompress(await bytesOf(`${kind}/${Object.keys(table).find((n) => n.startsWith("zeros."))}`), 1000);
+  } catch {
+    limited = true;
+  }
+  check(`${kind} output limit`, limited);
+}
+
+async function testXz(expected) {
+  const [lo, hi] = crc64(enc("123456789"));
+  check("crc64 123456789", lo === 0xdf1939fa && hi === 0x995dc9bb, `${hi.toString(16)}${lo.toString(16)}`);
+  await testDecompressor("xz", xzDecompress, expected.xz);
+}
+
+async function testBzip2(expected) {
+  await testDecompressor("bz2", bzip2Decompress, expected.bz2);
+}
+
+// Payloads built by tools/make_test_fixtures.py: every partition unpacks to its checksum,
+// as one stream and as sparse pieces of several sizes (whose block digest has to match
+// Python's), blocks of one repeated value become FILL chunks, and damage is caught.
+async function testPayload(expected) {
+  const zipBytes = await bytesOf("test-ota.zip");
+  const pkg = await OtaPackage.open(new Blob([zipBytes]));
+  const want = expected.ota["test-ota.zip"];
+  const names = [...pkg.partitions.keys()];
+  check("payload: partitions", names.slice().sort().join(" ") === Object.keys(want).sort().join(" "), names.join(" "));
+  const g = pkg.manifest.dynamic.groups[0];
+  check("payload: dynamic partition group", g && g.name === "somc_dynamic_partitions" && g.partitions.join(" ") === "system vendor");
+  for (const [name, w] of Object.entries(want)) {
+    const p = pkg.partition(name);
+    let ok = true;
+    try {
+      await p.verify();
+    } catch (e) {
+      ok = false;
+      check(`payload ${name}: verify`, false, e.message);
+    }
+    if (ok) check(`payload ${name}: verify`, true);
+    const s = new Sha256();
+    let n = 0;
+    const reader = p.stream().getReader();
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      s.update(value);
+      n += value.length;
+    }
+    check(`payload ${name}: stream`, n === w.size && s.hex() === w.sha256);
+    for (const max of [9000, 65536, 300000, 4 << 20]) {
+      const digest = new BlockDigest(p.blockSize);
+      let pieces = 0;
+      let largest = 0;
+      let fills = 0;
+      for await (const piece of splitSparse(null, { blockSize: p.blockSize, totalBlocks: p.totalBlocks }, max, p.chunks())) {
+        const data = concatBytes(piece.parts, piece.size);
+        largest = Math.max(largest, data.length);
+        digest.applySparse(data);
+        pieces++;
+      }
+      for await (const c of p.chunks()) if (c.type === 0xcac2) fills++;
+      check(
+        `payload ${name}: sparse pieces at ${max}`,
+        digest.hex() === w.block_digest && digest.blocks === p.totalBlocks && largest <= max,
+        `${pieces} pieces, ${fills} fill chunks`,
+      );
+    }
+  }
+  let fills = 0;
+  for await (const c of pkg.partition("system").chunks()) if (c.type === 0xcac2) fills++;
+  check("payload: zeros, gaps and the 0xaabbccdd pattern are fill chunks", fills >= 5, `${fills}`);
+  const head = await pkg.partition("vbmeta").head(128);
+  check("payload: vbmeta head", String.fromCharCode(...head.subarray(0, 4)) === "AVB0" && new DataView(head.buffer).getUint32(120) === 3);
+
+  // One changed byte in an operation's data: the operation's checksum catches it.
+  const sys = pkg.partition("system");
+  const op = sys.ops.find((o) => o.type === 8);
+  const bad = zipBytes.slice();
+  bad[pkg.dataStart + op.dataOffset + Math.floor(op.dataLength / 2)] ^= 0x01;
+  let caught = "";
+  try {
+    await (await OtaPackage.open(new Blob([bad]))).partition("system").verify();
+  } catch (e) {
+    caught = e.message;
+  }
+  check("payload: damaged operation data is refused", /damaged/.test(caught), caught);
+  // A changed manifest: the metadata checksum in payload_properties.txt catches it.
+  const badManifest = zipBytes.slice();
+  badManifest[pkg.dataStart - 300] ^= 0x01;
+  caught = "";
+  try {
+    await OtaPackage.open(new Blob([badManifest]));
+  } catch (e) {
+    caught = e.message;
+  }
+  check("payload: damaged manifest is refused", caught !== "", caught);
+
+  const e2e = await OtaPackage.open(new Blob([await bytesOf("e2e-ota.zip")]));
+  const all = expected.ota["e2e-ota.zip"];
+  let bad2 = [];
+  for (const [name, w] of Object.entries(all)) {
+    const p = e2e.partition(name);
+    try {
+      await p.verify();
+      if (p.sha256 !== w.sha256) bad2.push(name);
+    } catch (e) {
+      bad2.push(`${name}: ${e.message}`);
+    }
+  }
+  check("payload: e2e-ota.zip verifies", bad2.length === 0 && e2e.partitions.size === 12, bad2.join("; "));
+}
+
+// The super partition's table: the same bytes as tools/lp_metadata.py for every layout
+// (and, if linked, as the LineageOS build's own super.img without its extents), read back
+// with liblp's checks, and damage refused.
+async function testLp(expected) {
+  for (const [name, want] of Object.entries(expected.lp)) {
+    if (!want.layout) continue;
+    const mine = buildSuperEmpty(want.layout);
+    check(`lp ${name}: same bytes as Python`, sha(mine) === want.sha256 && mine.length === want.size, `${mine.length} bytes`);
+    const t = parseSuperImage(await bytesOf(`lp/${name}.img`));
+    check(
+      `lp ${name}: reads back`,
+      t.version === want.version &&
+        t.blockDevices[0].firstLogicalSector === want.first_logical_sector &&
+        t.partitions.length === want.layout.partitions.length &&
+        t.groups.length === want.layout.groups.length + 1,
+      `${t.version}, first sector ${t.blockDevices[0].firstLogicalSector}`,
+    );
+  }
+  if (expected.lp["real-emptied"]) {
+    const mine = buildSuperEmpty(expected.lp.pdx246.layout);
+    check("lp pdx246: same as the LineageOS build's table without extents", sha(mine) === expected.lp["real-emptied"].sha256);
+  }
+  const good = await bytesOf("lp/pdx246.img");
+  for (const [what, at] of [["geometry", 44], ["header", 4096 + 6], ["tables", 4096 + 256 + 10], ["last byte", good.length - 1]]) {
+    const bad = good.slice();
+    bad[at] ^= 1;
+    let threw = false;
+    try {
+      parseSuperImage(bad);
+    } catch {
+      threw = true;
+    }
+    check(`lp: damaged ${what} is refused`, threw);
+  }
+  let threw = false;
+  try {
+    buildSuperEmpty({ ...expected.lp.pdx246.layout, deviceSize: 1 << 20 });
+  } catch {
+    threw = true;
+  }
+  check("lp: a super partition too small for its metadata is refused", threw);
+}
+
+// With ?only=realota: the real LineageOS OTA zip, linked as fixtures/real-lineage/ (see
+// README). Every partition is unpacked and checked against the payload's SHA-256.
+async function testRealOta() {
+  const file = await RangeFile.open(`${FIX}real-lineage/lineage-23.2-20260924-UNOFFICIAL-pdx246.zip`);
+  const t0 = performance.now();
+  const pkg = await OtaPackage.open(file);
+  const names = [...pkg.partitions.keys()];
+  check("real OTA: opened", names.length === 12, `${names.join(" ")}, ${Math.round(performance.now() - t0)} ms`);
+  check("real OTA: pre-device", (pkg.metadata["pre-device"] || "").split("|").includes("pdx246"), pkg.metadata["pre-device"]);
+  const group = pkg.manifest.dynamic.groups[0];
+  check("real OTA: dynamic partitions", group.name === "somc_dynamic_partitions" && group.partitions.length === 6, group.partitions.join(" "));
+  for (const [name, img] of Object.entries(pdx246.lineage.images)) {
+    const p = pkg.partition(name.replace(".img", ""));
+    if (name !== "recovery.img") check(`real OTA: ${name} is the release's`, p && p.sha256 === img.sha256);
+  }
+  let total = 0;
+  let ms = 0;
+  for (const name of names) {
+    const p = pkg.partition(name);
+    const t = performance.now();
+    let ok = true;
+    let detail = "";
+    try {
+      await p.verify();
+    } catch (e) {
+      ok = false;
+      detail = e.message;
+    }
+    const dt = performance.now() - t;
+    ms += dt;
+    total += p.size;
+    check(`real OTA: ${name} unpacks to its checksum`, ok, detail || `${(p.size / 1e6).toFixed(0)} MB in ${(dt / 1000).toFixed(1)} s`);
+  }
+  check("real OTA: speed", true, `${(total / 1e9).toFixed(2)} GB in ${(ms / 1000).toFixed(0)} s, ${(total / 1e6 / (ms / 1000)).toFixed(0)} MB/s`);
+}
+
 async function main() {
   const expected = JSON.parse(await (await blob("expected.json")).text());
-  for (const t of [testHashes, () => testZip(expected), () => testSparse(expected), testFlashConfig]) {
+  const only = params.get("only");
+  const all = {
+    hashes: testHashes,
+    zip: () => testZip(expected),
+    sparse: () => testSparse(expected),
+    flashconfig: testFlashConfig,
+    xz: () => testXz(expected),
+    bzip2: () => testBzip2(expected),
+    lp: () => testLp(expected),
+    payload: () => testPayload(expected),
+    realota: testRealOta,
+  };
+  const optional = ["realota"]; // only when asked for: needs the linked real files
+  const selected = Object.entries(all).filter(([k]) => (only ? only.split(",").includes(k) : !optional.includes(k)));
+  for (const [, t] of selected) {
     try {
       await t();
     } catch (e) {

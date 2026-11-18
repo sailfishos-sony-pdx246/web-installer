@@ -40,21 +40,45 @@
         <h2>Before you start</h2>
         <ul>
           <li>
-            <strong>Installing erases all data on the phone</strong> (apps, photos, files) and replaces the boot
-            images of slot a.
+            <strong>Installing erases all data on the phone</strong> (apps, photos, files). Back up what you want to
+            keep.
           </li>
-          <li>The phone's bootloader must be unlocked, with Sony's unlock procedure.</li>
+          <li>Charge the phone to at least 50 %.</li>
+        </ul>
+        <h3>If the phone runs Sony's Android</h3>
+        <ol>
           <li>
-            For a first installation the phone must run <strong>LineageOS 23.2 for pdx246</strong>, release
-            v23.2-20260924, installed on slot a and started once to its home screen (wait a minute there, so that
-            its setup completes).
+            <strong>Install Sony's newest software update</strong> (Settings, System, Software update). After the
+            bootloader is unlocked, Sony offers no more updates, and LineageOS 23.2 needs firmware 70.2 or newer.
+          </li>
+          <li>
+            <strong>Turn on OEM unlocking:</strong> in Settings, About phone, tap <em>Build number</em> seven times;
+            then turn on <em>OEM unlocking</em> in Settings, System, Developer options.
+          </li>
+          <li>
+            <strong>Get Sony's unlock code:</strong> dial <code>*#06#</code> for the phone's IMEI (it has two: use
+            IMEI 1), and enter it for the Xperia 10 VI on
+            <a href="https://opendevices.sony.net/aosp-on-xperia-open-devices/get-started/unlock-bootloader/">Sony's
+              unlock page</a>. The code has 16 characters.
+          </li>
+        </ol>
+        <p class="small">
+          Unlocking the bootloader erases the phone and removes Sony's DRM keys for good: Sony warns that some camera
+          functions and protected content may stop working, and that the warranty may be void.
+        </p>
+        <h3>If the phone runs LineageOS or Sailfish OS</h3>
+        <ul>
+          <li>The bootloader is unlocked already.</li>
+          <li>
+            To install Sailfish OS over LineageOS, the phone must run <strong>LineageOS 23.2 for pdx246</strong>,
+            release v23.2-20260924, installed on slot a and started once to its home screen (wait a minute there, so
+            that its setup completes).
           </li>
           <li>
             Keep that LineageOS release's images (<code>boot.img</code>, <code>vendor_boot.img</code>,
             <code>dtbo.img</code>, <code>vendor_dlkm.img</code>, <code>recovery.img</code>). They are the only way
             back, and installing again over Sailfish OS needs them.
           </li>
-          <li>Charge the phone to at least 50 %.</li>
         </ul>
         <p class="small">
           The full instructions, including installing without this page, are in
@@ -123,6 +147,14 @@ sudo udevadm control --reload-rules</pre>
         <fieldset class="choices">
           <legend class="visually-hidden">Action</legend>
           <label>
+            <input type="radio" name="action" value="stock" />
+            <span>
+              <strong>Install Sailfish OS from Sony's Android.</strong> The page unlocks the bootloader if needed and
+              installs LineageOS 23.2 first. Needs the LineageOS zip. <em>New: not yet tried on a phone with Sony's
+                Android.</em>
+            </span>
+          </label>
+          <label>
             <input type="radio" name="action" value="install" checked />
             <span><strong>Install Sailfish OS.</strong> The phone runs LineageOS 23.2.</span>
           </label>
@@ -168,6 +200,30 @@ sudo udevadm control --reload-rules</pre>
             <input type="checkbox" id="lineage-override-box" /> Use these images anyway.
           </label>
         </div>
+        <div id="lineage-zip-field" class="field" hidden>
+          <label for="lineage-zip-input">LineageOS zip</label>
+          <input type="file" id="lineage-zip-input" accept=".zip,application/zip" />
+          <p class="small">
+            <code>lineage-23.2-20260924-UNOFFICIAL-pdx246.zip</code> from the
+            <a href="https://github.com/johanneszab/lineageos-pdx246-releases/releases/tag/v23.2-20260924">LineageOS
+              release v23.2-20260924</a> (not a 24.0 release). The page unpacks and checks all of it first, which takes
+            a few minutes.
+          </p>
+          <p id="lineage-zip-status" class="status" hidden></p>
+          <label id="lineage-zip-override" class="override" hidden>
+            <input type="checkbox" id="lineage-zip-override-box" /> Use this zip anyway.
+          </label>
+        </div>
+        <div id="unlock-field" class="field" hidden>
+          <label for="unlock-input">Sony's unlock code</label>
+          <input type="text" id="unlock-input" autocomplete="off" spellcheck="false" maxlength="24" placeholder="16 characters, 0-9 and A-F" />
+          <p class="small">Needed only while the bootloader is locked; the page shows the lock state after Connect.</p>
+          <p id="unlock-status" class="status" hidden></p>
+          <label class="override">
+            <input type="checkbox" id="unlock-ack-box" /> I understand that unlocking erases the phone, removes Sony's DRM
+            keys for good and ends Sony's software updates.
+          </label>
+        </div>
       </section>
 
       <section id="sec-connect">
@@ -186,7 +242,7 @@ sudo udevadm control --reload-rules</pre>
 
       <section id="sec-install">
         <h2><span class="num">4</span> Install</h2>
-        <p>
+        <p id="install-intro">
           This takes about ten minutes. Do not unplug the phone or close this page. The phone restarts twice during
           the installation; the first time it restarts into fastbootd, the browser asks you to choose the phone
           again.

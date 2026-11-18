@@ -7,14 +7,16 @@ SPDX-License-Identifier: CC-BY-SA-4.0
 
 A web page that installs the Sailfish OS port for the Xperia 10 VI (pdx246) from the browser
 over WebUSB, with no fastboot on the computer. It does what `flash.sh` in the image zip does,
-and also the two procedures of INSTALL.md that are done by hand today: installing again over
-Sailfish OS, and going back to LineageOS.
+and also the procedures of INSTALL.md that are done by hand today: installing LineageOS 23.2
+on a phone that runs Sony's Android, installing again over Sailfish OS, and going back to
+LineageOS.
 
 **Status: prototype.** Tested against a simulated phone (below) and once on a real phone: an
 "Install again" run of release v5.2.0.22-20261101 with Google Chrome on Linux, 7 minutes from
 start to finish. The read-only check also passed in Ubuntu's Chromium snap. The attention cues
-and the parallel USB transfers came after that run and are tested in the simulation only. Not
-yet tested on Windows or macOS.
+and the parallel USB transfers came after that run and are tested in the simulation only. The
+installation from Sony's Android is tested in the simulation only, with the real LineageOS
+zip; it has not run on a phone with Sony's Android yet. Not yet tested on Windows or macOS.
 
 ## How it works
 
@@ -43,13 +45,53 @@ yet tested on Windows or macOS.
   for a known one. Other chimes mark the end and an error; a checkbox turns the sound off. A
   lost answer to `reboot-fastboot`, common with this bootloader, is not an error.
 
+### From Sony's Android (`js/stock.js`, `js/payload.js`)
+
+LineageOS is written straight to slot a from its OTA zip, the way a build's images are
+flashed with fastboot, instead of LineageOS's usual way through its recovery and
+`adb sideload`. So no recovery menus, no adb, no second slot and no first start of LineageOS
+are needed: without an update applied by the phone, there is no Virtual A/B merge to wait for.
+
+- **The zip.** The page reads `payload.bin` in place (format "CrAU", AOSP's
+  `update_metadata.proto`): a full payload holds each partition as operations on 4 KiB blocks,
+  REPLACE, REPLACE_XZ, REPLACE_BZ and ZERO, with a SHA-256 for every operation's data and every
+  partition. Before the phone is touched, it identifies the release by its SHA-256, refuses a
+  zip for another device or another Android version (LineageOS 24 is Android 17), and unpacks
+  every partition once against its checksum: 6.1 GB, a few minutes. Its own XZ (`js/xz.js`) and
+  bzip2 (`js/bzip2.js`) decompressors do the unpacking; blocks that repeat one 4-byte value,
+  such as the zeros of a partition's free space, become FILL chunks of the sparse pieces and
+  cost no transfer time.
+- **The phone.** In the bootloader, the page reads `getvar:all` (where Sony's bootloader also
+  reports the active slot) and checks the model and Sony's firmware: LineageOS 23.2 needs 70.2
+  or newer. It unlocks the bootloader with `oem unlock 0x<code>` and Sony's code, typed into the
+  page, if it is locked. LineageOS and Sailfish OS run from slot a; if Sony's Android ran from
+  slot b, the page restarts into slot a's bootloader to check the firmware there too, and stops
+  if it is older (it would have to be copied over first, which the page cannot do).
+- **Writing.** In the bootloader: LineageOS's boot, vendor_boot, dtbo, recovery, vbmeta and
+  vbmeta_system to slot a, slot a active. Then the page restarts into LineageOS's fastbootd,
+  cancels an update of Sony's Android that may be pending, replaces the table of the super
+  partition with the build's empty one (`update-super`, built by `js/lp-metadata.js` as lpmake
+  does) and writes system, vendor, vendor_dlkm, system_ext, odm and product. The Sailfish OS
+  installation follows as usual. Every run starts over from the boot images, so a stopped one
+  can simply be started again.
+
+What the page assumes about Sony's bootloader on a phone with Sony's Android, from the
+LineageOS port, AOSP's fastboot and Sony's instructions, without having seen it: `getvar:all`
+lists `current-slot`; a locked bootloader refuses to write and to switch slots; `oem unlock
+0x<code>` answers OKAY (the page also copes with a restart afterwards); `version-baseband`
+reports the firmware of the active slot.
+
 ### Xperia 10 VI specifics (`js/device-pdx246.js`)
 
 - The Sony bootloader answers `getvar:max-download-size` with FAIL, so downloads are capped at
   256 MiB, the size `fastboot -S 256M` uses on this phone; in fastbootd the reported limit is
   used if it is smaller.
-- The page writes only `boot_a`, `vendor_boot_a`, `dtbo_a`, `recovery_a`, `vendor_dlkm_a` and
-  `userdata`.
+- From a Sailfish OS zip's `FLASH_OPS`, the page writes only `boot_a`, `vendor_boot_a`,
+  `dtbo_a`, `recovery_a`, `vendor_dlkm_a` and `userdata`. From LineageOS's zip, it also writes
+  `vbmeta_a`, `vbmeta_system_a` and the dynamic partitions of slot a.
+- The table of super: 16 GiB, the group `somc_dynamic_partitions` in both slots, Virtual A/B
+  (metadata version 10.2, three slots), the same bytes as the table of the LineageOS build's own
+  super.img without its extents.
 
 ### Differences from flash.sh and host fastboot
 
@@ -89,8 +131,16 @@ same USB IDs, the bootloader's FAIL for long variable names, the lost answer to
 Sailfish OS, so fastbootd is not reachable), `merge=merging` (a pending Virtual A/B merge),
 `lostReply=0`, `scale=` (time factor of the phone's delays), `usbLatency=` (milliseconds per
 USB transfer), `mockReset=1` (forget the simulated USB permissions, like a new browser; they
-are kept across page loads otherwise, as Chrome keeps them). `testzip=` and `testlineage=`
-load files from the server instead of the file pickers.
+are kept across page loads otherwise, as Chrome keeps them). `testzip=`, `testlineage=` and
+`testlineagezip=` load files from the server instead of the file pickers.
+
+`stock=1` simulates a phone with Sony's Android: a locked bootloader (`unlocked=1` for an
+unlocked one) whose unlock code is `0123456789ABCDEF` (`unlockCode=` for another), Sony's
+partitions in super and Sony's recovery. Further parameters: `stockSlot=a|b` (the active slot,
+b by default), `fwA=`, `fwB=` (each slot's firmware, `70.2.A.4.22` by default), `oemUnlock=off`
+(OEM unlocking switched off), `unlockReboots=1` (the bootloader restarts after unlocking),
+`fastbootdMax=` (fastbootd's download limit, for many small pieces) and `lineageBoot=` (the
+SHA-256 of a test zip's boot image, so that the simulation takes it for LineageOS's).
 
 On any page, `xfer=` (bytes per USB transfer) and `inflight=` (transfers in flight) change the
 download settings for measurements, and `upload=1` sends the log to `tools/dev_server.py`
@@ -103,15 +153,23 @@ python3 tools/make_test_fixtures.py
 ```
 
 Then open <http://localhost:8765/test/>: CRC-32, SHA-256, the zip reader (including ZIP64),
-sparse splitting of synthetic images at many sizes, and the flash-config.sh parser. The
-expected values come from Python (`tools/sparse_digest.py`). With `?upload=1` and
-`tools/dev_server.py --upload-dir DIR`, the test page uploads the sparse pieces it produces;
-`tools/check_pieces.py DIR test/fixtures` then checks them independently, and AOSP's
-`simg2img` accepts each one.
+sparse splitting of synthetic images at many sizes, the flash-config.sh parser, the XZ and
+bzip2 decompressors (data from Python's `lzma` and `bz2` and the `xz` tool in many variants,
+and damaged copies), the super partition's table (against `tools/lp_metadata.py`, a second
+implementation in Python), and the payload reader (synthetic payloads with every operation
+type, unpacked as a stream and as sparse pieces of several sizes). The expected values come
+from Python (`tools/sparse_digest.py`). With `?upload=1` and `tools/dev_server.py --upload-dir
+DIR`, the test page uploads the sparse pieces it produces; `tools/check_pieces.py DIR
+test/fixtures` then checks them independently, and AOSP's `simg2img` accepts each one.
 
 For an end-to-end run with a real release, link the image zip and the LineageOS images into
 `test/fixtures/` and compare what the simulated phone received
-(`__mock.phone.results()`) with `tools/sparse_digest.py` run on the same files.
+(`__mock.phone.results()`) with `tools/sparse_digest.py` run on the same files. For the
+installation from Sony's Android, link the LineageOS release's folder (with its OTA zip and
+super.img) as `test/fixtures/real-lineage/`: `make_test_fixtures.py` then also compares the
+super table, `/test/?only=realota` unpacks the whole zip in the browser, and
+`tools/payload_digest.py` gives the values the simulated phone has to report, unpacked with
+Python's own `lzma` and `bz2`.
 
 ## Licences
 
