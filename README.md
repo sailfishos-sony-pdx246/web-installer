@@ -11,12 +11,17 @@ and also the procedures of INSTALL.md that are done by hand today: installing Li
 on a phone that runs Sony's Android, installing again over Sailfish OS, and going back to
 LineageOS.
 
-**Status: prototype.** Tested against a simulated phone (below) and once on a real phone: an
-"Install again" run of release v5.2.0.22-20261101 with Google Chrome on Linux, 7 minutes from
-start to finish. The read-only check also passed in Ubuntu's Chromium snap. The attention cues
-and the parallel USB transfers came after that run and are tested in the simulation only. The
-installation from Sony's Android is tested in the simulation only, with the real LineageOS
-zip; it has not run on a phone with Sony's Android yet. Not yet tested on Windows or macOS.
+**Status: prototype.** Tested against a simulated phone (below) and on a real phone with
+Google Chrome on Linux:
+- "Install again" of release v5.2.0.22-20261101: 7 minutes from start to finish, with one USB
+  transfer at a time.
+- "Install Sailfish OS from Sony's Android" on that phone while it ran Sailfish OS: LineageOS
+  v23.2-20260924 written from its OTA zip, then Sailfish OS, in 8 minutes, with downloads at
+  about 25 MB/s through a virtual machine.
+
+The read-only check also passed in Ubuntu's Chromium snap. Not yet tested on a real phone: the
+parts only a phone with Sony's Android has (the unlock, Sony's own partitions in super, slot b),
+and the attention cues (no click was needed). Not yet tested on Windows or macOS.
 
 ## How it works
 
