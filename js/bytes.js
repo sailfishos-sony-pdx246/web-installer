@@ -128,14 +128,22 @@ export function sleep(ms) {
 }
 
 // Long computations call this between steps: about every 50 ms it lets the browser draw and
-// handle events and timers. (An await on data that is already there does not.) A plain
-// timeout, not scheduler.yield(): that one resumes ahead of the page's timers, which then
-// wait until the computation ends.
+// handle events and timers. (An await on data that is already there does not.) It waits for
+// a message on a channel: a timeout would be slowed to one a second or less while the tab is
+// hidden, and scheduler.yield() resumes ahead of the page's timers, which then wait until the
+// computation ends.
+const channel = typeof MessageChannel === "function" ? new MessageChannel() : null;
+const waiting = [];
+if (channel) channel.port1.onmessage = () => waiting.shift()();
 let lastYield = 0;
 export async function yieldNow() {
   const now = performance.now();
   if (now - lastYield < 50) return;
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => {
+    if (!channel) return setTimeout(resolve, 0);
+    waiting.push(resolve);
+    channel.port2.postMessage(null);
+  });
   lastYield = performance.now();
 }
 
