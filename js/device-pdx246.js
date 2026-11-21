@@ -45,6 +45,13 @@ export const pdx246 = {
 
   releases: [
     {
+      tag: "v5.2.0.22-20261121",
+      file: "Sailfish_OS-5.2.0.22-pdx246-0.0.1.202611210911.zip",
+      size: 886602322,
+      sha256: "3be5714ea7eeb54561354359b8143f8f94fdc620f4417621b369f7f63913151b",
+      url: "https://github.com/sailfishos-sony-pdx246/main/releases/tag/v5.2.0.22-20261121",
+    },
+    {
       tag: "v5.2.0.22-20261120",
       file: "Sailfish_OS-5.2.0.22-pdx246-0.0.1.202611202002.zip",
       size: 885779383,
