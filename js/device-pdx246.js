@@ -60,29 +60,50 @@ export const pdx246 = {
     },
   ],
 
-  // LineageOS 23.2 release the Sailfish OS images are built for; its images are needed to
-  // install again over Sailfish OS and to go back (INSTALL.md sections 4 and 5), and its OTA
-  // zip to install from Sony's Android.
+  // LineageOS 23.2 for pdx246 (Android 16) on slot a, which Sailfish OS runs on: any of its
+  // builds. The releases Sailfish OS was tested with are listed, newest first: their images
+  // (to install again over Sailfish OS and to go back, INSTALL.md sections 4 and 5) and their
+  // OTA zips (to install from Sony's Android). Other 23.2 builds are accepted with a note.
   lineage: {
-    tag: "v23.2-20260924",
-    url: "https://github.com/johanneszab/lineageos-pdx246-releases/releases/tag/v23.2-20260924",
+    url: "https://github.com/johanneszab/lineageos-pdx246-releases/releases",
     // LineageOS 23.2 is Android 16; an OTA zip of another Android version is refused.
     sdkLevel: "36",
-    zips: [
+    releases: [
+      {
+        tag: "v23.2-20261102",
+        url: "https://github.com/johanneszab/lineageos-pdx246-releases/releases/tag/v23.2-20261102",
+        zip: {
+          file: "lineage-23.2-20261102-UNOFFICIAL-pdx246.zip",
+          size: 1392458150,
+          sha256: "1671cba7418666e4406a764d825c81cca1c208b3d620dbc69dbbb88290b985ba",
+        },
+        images: {
+          "boot.img": { size: 100663296, sha256: "8cd6999ce053003cbdc41722bdf1b5b95516e65754c8ba73a0ea1a7472751d50" },
+          "vendor_boot.img": { size: 100663296, sha256: "e0566459cdb1659dbee7228d1910955f8b600108984552146f9c53557b978a1f" },
+          "dtbo.img": { size: 25165824, sha256: "6bfe5ecaea11cc107b5f0638294bb2d140ddf49d2d063f8a6252ce5e491acebc" },
+          "vendor_dlkm.img": { size: 69554176, sha256: "4614447fd92a0da858db5aaa31ebafb13a66b4551f3cc3f5e569113f1ad4d009" },
+          "recovery.img": { size: 104857600, sha256: "2b2745554476ace153fb97aa6afa688c75e44f1263757e955dc009b65dd66578" },
+        },
+      },
       {
         tag: "v23.2-20260924",
-        file: "lineage-23.2-20260924-UNOFFICIAL-pdx246.zip",
-        size: 1394134959,
-        sha256: "1808691f97a66ec959f0978002d86284980542a3628bcc8f6ba0f30400fe9eb4",
+        url: "https://github.com/johanneszab/lineageos-pdx246-releases/releases/tag/v23.2-20260924",
+        zip: {
+          file: "lineage-23.2-20260924-UNOFFICIAL-pdx246.zip",
+          size: 1394134959,
+          sha256: "1808691f97a66ec959f0978002d86284980542a3628bcc8f6ba0f30400fe9eb4",
+        },
+        images: {
+          "boot.img": { size: 100663296, sha256: "c9f9f9aeb15a89ee6827c377d595c99a3583f4a87c5cecd4c4572d2c2586c93f" },
+          "vendor_boot.img": { size: 100663296, sha256: "e2bed09884588f46ac104e1217fa7fa73e8e17b6cb31b54f0a69e1a233408caf" },
+          "dtbo.img": { size: 25165824, sha256: "6bfe5ecaea11cc107b5f0638294bb2d140ddf49d2d063f8a6252ce5e491acebc" },
+          "vendor_dlkm.img": { size: 69554176, sha256: "1737d196093af5dd9b9d91defa3ef61f74cfc25062679693513aa362e185ec5e" },
+          "recovery.img": { size: 104857600, sha256: "caf9215e86d0d324ee9fbade19e752671c01c9385d92e4d28d9ed80b97dab9f4" },
+        },
       },
     ],
-    images: {
-      "boot.img": { size: 100663296, sha256: "c9f9f9aeb15a89ee6827c377d595c99a3583f4a87c5cecd4c4572d2c2586c93f" },
-      "vendor_boot.img": { size: 100663296, sha256: "e2bed09884588f46ac104e1217fa7fa73e8e17b6cb31b54f0a69e1a233408caf" },
-      "dtbo.img": { size: 25165824, sha256: "6bfe5ecaea11cc107b5f0638294bb2d140ddf49d2d063f8a6252ce5e491acebc" },
-      "vendor_dlkm.img": { size: 69554176, sha256: "1737d196093af5dd9b9d91defa3ef61f74cfc25062679693513aa362e185ec5e" },
-      "recovery.img": { size: 104857600, sha256: "caf9215e86d0d324ee9fbade19e752671c01c9385d92e4d28d9ed80b97dab9f4" },
-    },
+    // The images the page uses (those of every release)
+    imageNames: ["boot.img", "vendor_boot.img", "dtbo.img", "vendor_dlkm.img", "recovery.img"],
   },
 
   // Installing from Sony's Android: LineageOS's OTA zip is written straight to slot a, the

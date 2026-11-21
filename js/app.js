@@ -54,10 +54,9 @@ const state = {
   action: "install",
   sailfish: null, // { file, zip, config, plan, images, release }
   sailfishOverride: false,
-  lineage: new Map(), // name -> { file, image, known }
-  lineageOverride: false,
+  lineage: new Map(), // name -> { file, image, known, releases }
+  lineageOverride: false, // images from different tested releases
   lineageZip: null, // { file, pkg, release, sha256 }
-  lineageZipOverride: false,
   unlockCode: "",
   unlockAck: false,
   busy: false,
@@ -232,17 +231,21 @@ async function onLineageChosen(files) {
   updateReady();
   try {
     for (const file of files) {
-      const expected = profile.lineage.images[file.name];
-      if (!expected) {
+      if (!profile.lineage.imageNames.includes(file.name)) {
         log(`lineage: ignoring ${file.name} (not one of the images this page uses)`);
         continue;
       }
-      state.lineage.set(file.name, { file, image: fileImage(file), known: null });
+      state.lineage.set(file.name, { file, image: fileImage(file), known: null, releases: [] });
       renderLineage();
       const sha = await hashFile(file, () => {});
-      const known = sha === expected.sha256 && file.size === expected.size;
-      state.lineage.get(file.name).known = known;
-      log(`lineage: ${file.name}, ${formatSize(file.size)}, sha256 ${sha}${known ? "" : " (differs from the release)"}`);
+      // The tested releases this image is part of: an image can be the same in several
+      const releases = profile.lineage.releases
+        .filter((r) => r.images[file.name] && r.images[file.name].sha256 === sha && r.images[file.name].size === file.size)
+        .map((r) => r.tag);
+      const item = state.lineage.get(file.name);
+      item.known = releases.length > 0;
+      item.releases = releases;
+      log(`lineage: ${file.name}, ${formatSize(file.size)}, sha256 ${sha} (${releases.length ? releases.join(", ") : "not from a tested release"})`);
       renderLineage();
     }
   } finally {
@@ -251,11 +254,20 @@ async function onLineageChosen(files) {
   }
 }
 
+// Any LineageOS 23.2 build works, with images all from that build. Images of tested releases are
+// recognised; images that each come from a tested release, but not all from one, are a mix of
+// builds.
+function lineageMixed(needs) {
+  const items = needs.map((name) => state.lineage.get(name));
+  if (items.length === 0 || items.some((item) => !item || !item.known)) return false;
+  return !items[0].releases.some((tag) => items.every((item) => item.releases.includes(tag)));
+}
+
 function renderLineage() {
   const needs = LINEAGE_NEEDS[state.action];
   const ul = $("lineage-status");
   ul.innerHTML = "";
-  let unknown = false;
+  let untested = false;
   for (const name of needs) {
     const li = document.createElement("li");
     const item = state.lineage.get(name);
@@ -267,15 +279,18 @@ function renderLineage() {
       li.textContent = `${name}: checking…`;
     } else if (item.known) {
       li.className = "good";
-      li.textContent = `${name}: matches LineageOS ${profile.lineage.tag}`;
+      li.textContent = `${name}: LineageOS ${item.releases.join(", ")}`;
     } else {
-      li.className = "warn";
-      li.textContent = `${name}: differs from LineageOS ${profile.lineage.tag}`;
-      unknown = true;
+      li.className = "note";
+      li.textContent = `${name}: not from a tested LineageOS release`;
+      untested = true;
     }
     ul.appendChild(li);
   }
-  $("lineage-override").hidden = !unknown;
+  const mixed = lineageMixed(needs);
+  $("lineage-untested").hidden = !untested;
+  $("lineage-mixed").hidden = !mixed;
+  $("lineage-override").hidden = !mixed;
 }
 
 function lineageReady() {
@@ -283,9 +298,8 @@ function lineageReady() {
   for (const name of needs) {
     const item = state.lineage.get(name);
     if (!item || item.known === null) return false;
-    if (!item.known && !state.lineageOverride) return false;
   }
-  return true;
+  return !lineageMixed(needs) || state.lineageOverride;
 }
 
 function sailfishReady() {
@@ -298,9 +312,6 @@ function sailfishReady() {
 
 async function onLineageZipChosen(file) {
   state.lineageZip = null;
-  state.lineageZipOverride = false;
-  $("lineage-zip-override").hidden = true;
-  $("lineage-zip-override-box").checked = false;
   if (!file) {
     setStatus("lineage-zip-status", "", "");
     updateReady();
@@ -313,21 +324,20 @@ async function onLineageZipChosen(file) {
     const r = await stock.checkLineageZip(file, profile, (text) => setStatus("lineage-zip-status", "work", escapeHtml(text)));
     state.lineageZip = { file, ...r };
     const secs = Math.round((performance.now() - t0) / 1000);
-    log(`lineage zip: ${file.name}, ${formatSize(file.size)}, sha256 ${r.sha256}${r.release ? ` (release ${r.release.tag})` : " (unknown)"}`);
+    log(`lineage zip: ${file.name}, ${formatSize(file.size)}, sha256 ${r.sha256}${r.release ? ` (release ${r.release.tag})` : " (not a tested release)"}`);
     log(`lineage zip: all ${r.pkg.partitions.size} partitions unpack to their checksums (${secs} s)`);
     if (r.release) {
       setStatus(
         "lineage-zip-status",
         "good",
-        `LineageOS release <strong>${escapeHtml(r.release.tag)}</strong>: the checksum matches the published one, and every partition in it unpacks correctly.`,
+        `LineageOS release <strong>${escapeHtml(r.release.tag)}</strong>, tested with Sailfish OS: the checksum matches the published one, and every partition in it unpacks correctly.`,
       );
     } else {
       setStatus(
         "lineage-zip-status",
-        "warn",
-        `This zip is not the LineageOS release this page knows (SHA-256 <code>${r.sha256.slice(0, 16)}…</code>), though every partition in it unpacks correctly. Sailfish OS is built for ${escapeHtml(profile.lineage.tag)}.`,
+        "note",
+        `LineageOS 23.2 for the ${escapeHtml(profile.name)}, not one of the releases tested with Sailfish OS (SHA-256 <code>${r.sha256.slice(0, 16)}…</code>). Any 23.2 build works, and every partition in this one unpacks correctly.`,
       );
-      $("lineage-zip-override").hidden = false;
     }
   } catch (e) {
     setStatus("lineage-zip-status", "bad", escapeHtml(e.message));
@@ -340,8 +350,7 @@ async function onLineageZipChosen(file) {
 
 function lineageZipReady() {
   if (state.action !== "stock") return true;
-  const z = state.lineageZip;
-  return !!z && (!!z.release || state.lineageZipOverride);
+  return !!state.lineageZip;
 }
 
 // The unlock code is needed only if the connected phone's bootloader is locked.
@@ -889,7 +898,7 @@ async function setupMock() {
     scale: Number(params.get("scale") || 0.2),
     latency: Number(params.get("usbLatency") || 0),
     resetPermissions: params.has("mockReset"),
-    lineageBootSha256: profile.lineage.images["boot.img"].sha256,
+    lineageBootSha256: profile.lineage.releases[0].images["boot.img"].sha256,
     // A phone with Sony's Android (?stock=1), and how it is set up.
     stock: params.has("stock"),
     stockSlot: params.get("stockSlot") || "b",
@@ -900,8 +909,12 @@ async function setupMock() {
     unlockCode: params.get("unlockCode") || undefined,
     unlockReboots: params.has("unlockReboots"),
     fastbootdMax: Number(params.get("fastbootdMax")) || undefined,
-    // SHA-256 of further boot images that count as LineageOS's (a test zip's).
-    lineageBoots: (params.get("lineageBoot") || "").split(",").filter(Boolean),
+    // SHA-256 of further boot images that count as LineageOS's: the other tested releases',
+    // and a test zip's.
+    lineageBoots: [
+      ...profile.lineage.releases.map((r) => r.images["boot.img"].sha256),
+      ...(params.get("lineageBoot") || "").split(",").filter(Boolean),
+    ],
   });
   usb = mock.usb;
   window.__mock = mock;
@@ -923,7 +936,7 @@ async function loadTestFiles() {
   const lineage = params.get("testlineage");
   if (lineage) {
     const files = [];
-    for (const name of Object.keys(profile.lineage.images)) files.push(await RangeFile.open(`${lineage}/${name}`));
+    for (const name of profile.lineage.imageNames) files.push(await RangeFile.open(`${lineage}/${name}`));
     await onLineageChosen(files);
   }
   const lineageZip = params.get("testlineagezip");
@@ -932,8 +945,19 @@ async function loadTestFiles() {
 
 // ---------------------------------------------------------------- start
 
+// The LineageOS releases tested with Sailfish OS, in the page's texts
+function renderLineageTexts() {
+  const tested = profile.lineage.releases.map((r) => r.tag).join(", ");
+  for (const el of document.querySelectorAll(".lineage-tested")) el.textContent = tested;
+  const newest = profile.lineage.releases[0];
+  $("lineage-newest-zip").textContent = newest.zip.file;
+  $("lineage-newest-link").href = newest.url;
+  $("lineage-newest-link").textContent = `release ${newest.tag}`;
+}
+
 async function main() {
   if (MOCK) await setupMock();
+  renderLineageTexts();
   const ok = checkBrowser();
   conn = new Connection(usb || new EventTarget(), profile, log, { readOnly: READONLY, ...TUNING });
   if (TUNING.transferSize || TUNING.inFlight) {
@@ -978,10 +1002,6 @@ async function main() {
     updateReady();
   });
   $("lineage-zip-input").addEventListener("change", (e) => onLineageZipChosen(e.target.files[0] || null));
-  $("lineage-zip-override-box").addEventListener("change", (e) => {
-    state.lineageZipOverride = e.target.checked;
-    updateReady();
-  });
   $("unlock-input").addEventListener("input", onUnlockInput);
   $("unlock-ack-box").addEventListener("change", onUnlockInput);
   $("connect-btn").addEventListener("click", onConnectClick);

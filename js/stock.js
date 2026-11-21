@@ -31,8 +31,9 @@ export function normalizeUnlockCode(s) {
 
 // ---------------------------------------------------------------- the LineageOS zip
 
-// Opens and checks an OTA zip for this flow: the device, the Android version, the release
-// (by SHA-256), the partitions, and then every partition unpacked against its checksum.
+// Opens and checks an OTA zip for this flow: the device, the Android version, the partitions,
+// and then every partition unpacked against its checksum. Any LineageOS 23.2 build passes;
+// release is the tested release it is (by SHA-256), or null.
 // onStatus(text) reports progress. Returns { pkg, release, sha256 }.
 export async function checkLineageZip(file, profile, onStatus = () => {}) {
   onStatus("Reading the zip…");
@@ -45,7 +46,7 @@ export async function checkLineageZip(file, profile, onStatus = () => {}) {
   if (sdk !== profile.lineage.sdkLevel) {
     throw new Error(
       `This zip installs Android SDK level ${sdk || "?"}, but Sailfish OS for the ${profile.name} runs on LineageOS 23.2 ` +
-        `(Android 16, level ${profile.lineage.sdkLevel}). Use the LineageOS ${profile.lineage.tag} zip.`,
+        `(Android 16, level ${profile.lineage.sdkLevel}). Use a LineageOS 23.2 zip, such as ${profile.lineage.releases[0].zip.file}.`,
     );
   }
   const st = profile.stock;
@@ -67,7 +68,7 @@ export async function checkLineageZip(file, profile, onStatus = () => {}) {
     onStatus(`Checking the zip (1 of 2): checksum, ${Math.floor((100 * done) / file.size)} %`);
   }
   const sha256 = sha.hex();
-  const release = profile.lineage.zips.find((z) => z.sha256 === sha256 && z.size === file.size) || null;
+  const release = profile.lineage.releases.find((r) => r.zip.sha256 === sha256 && r.zip.size === file.size) || null;
 
   const names = [...st.physical.map(([src]) => src), ...group.partitions];
   const total = names.reduce((s, n) => s + pkg.partition(n).size, 0);

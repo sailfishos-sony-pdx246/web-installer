@@ -70,9 +70,10 @@
         <ul>
           <li>The bootloader is unlocked already.</li>
           <li>
-            To install Sailfish OS over LineageOS, the phone must run <strong>LineageOS 23.2 for pdx246</strong>,
-            release v23.2-20260924, installed on slot a and started once to its home screen (wait a minute there, so
-            that its setup completes).
+            To install Sailfish OS over LineageOS, the phone must run <strong>LineageOS 23.2 for pdx246</strong>
+            (any of its builds; tested with <span class="lineage-tested">v23.2-20261102, v23.2-20260924</span>),
+            installed on slot a and started once to its home screen (wait a minute there, so that its setup
+            completes).
           </li>
           <li>
             Keep that LineageOS release's images (<code>boot.img</code>, <code>vendor_boot.img</code>,
@@ -192,10 +193,18 @@ sudo udevadm control --reload-rules</pre>
           <input type="file" id="lineage-input" accept=".img" multiple />
           <p class="small">
             Choose all of them at once: <span id="lineage-needs"></span>, from the
-            <a href="https://github.com/johanneszab/lineageos-pdx246-releases/releases/tag/v23.2-20260924">LineageOS
-              release v23.2-20260924</a>.
+            <a href="https://github.com/johanneszab/lineageos-pdx246-releases/releases">LineageOS release</a> that the
+            phone runs.
           </p>
           <ul id="lineage-status" class="checklist"></ul>
+          <p id="lineage-untested" class="status note" hidden>
+            Not all of these images are from a LineageOS release tested with Sailfish OS
+            (<span class="lineage-tested">v23.2-20261102, v23.2-20260924</span>). Any LineageOS 23.2 build for pdx246
+            works: use the images of the build the phone runs, all from that one build.
+          </p>
+          <p id="lineage-mixed" class="status warn" hidden>
+            These images come from different LineageOS releases. Use the images of one build, the one the phone runs.
+          </p>
           <label id="lineage-override" class="override" hidden>
             <input type="checkbox" id="lineage-override-box" /> Use these images anyway.
           </label>
@@ -204,15 +213,12 @@ sudo udevadm control --reload-rules</pre>
           <label for="lineage-zip-input">LineageOS zip</label>
           <input type="file" id="lineage-zip-input" accept=".zip,application/zip" />
           <p class="small">
-            <code>lineage-23.2-20260924-UNOFFICIAL-pdx246.zip</code> from the
-            <a href="https://github.com/johanneszab/lineageos-pdx246-releases/releases/tag/v23.2-20260924">LineageOS
-              release v23.2-20260924</a> (not a 24.0 release). The page unpacks and checks all of it first, which takes
-            a few minutes.
+            A LineageOS 23.2 OTA zip for pdx246 (not a 24.0 one), preferably the newest one tested with Sailfish OS:
+            <code id="lineage-newest-zip">lineage-23.2-20261102-UNOFFICIAL-pdx246.zip</code> from
+            <a id="lineage-newest-link" href="https://github.com/johanneszab/lineageos-pdx246-releases/releases/tag/v23.2-20261102">release
+              v23.2-20261102</a>. The page unpacks and checks all of it first, which takes a few minutes.
           </p>
           <p id="lineage-zip-status" class="status" hidden></p>
-          <label id="lineage-zip-override" class="override" hidden>
-            <input type="checkbox" id="lineage-zip-override-box" /> Use this zip anyway.
-          </label>
         </div>
         <div id="unlock-field" class="field" hidden>
           <label for="unlock-input">Sony's unlock code</label>

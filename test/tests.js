@@ -383,7 +383,8 @@ async function testRealOta() {
   check("real OTA: pre-device", (pkg.metadata["pre-device"] || "").split("|").includes("pdx246"), pkg.metadata["pre-device"]);
   const group = pkg.manifest.dynamic.groups[0];
   check("real OTA: dynamic partitions", group.name === "somc_dynamic_partitions" && group.partitions.length === 6, group.partitions.join(" "));
-  for (const [name, img] of Object.entries(pdx246.lineage.images)) {
+  const release = pdx246.lineage.releases.find((r) => r.tag === "v23.2-20260924");
+  for (const [name, img] of Object.entries(release.images)) {
     const p = pkg.partition(name.replace(".img", ""));
     if (name !== "recovery.img") check(`real OTA: ${name} is the release's`, p && p.sha256 === img.sha256);
   }

@@ -27,8 +27,10 @@ and the attention cues (no click was needed). Not yet tested on Windows or macOS
 
 - **Files.** The user picks the image zip as downloaded; the page reads it in place, without
   unpacking it. It identifies the release by its SHA-256 and checks the CRC-32 of every image
-  it will write before the phone is touched. The LineageOS images are checked against the
-  SHA-256 sums of their release.
+  it will write before the phone is touched. Any LineageOS 23.2 build is accepted: its images
+  and its OTA zip are compared with the SHA-256 sums of the releases tested with Sailfish OS
+  (`lineage.releases` in `js/device-pdx246.js`), an untested build gets a note, and images from
+  two different tested releases need a confirmation.
 - **Operations.** The page reads `flash-config.sh` from the zip and runs its `FLASH_OPS`
   with flash.sh's semantics: `getvar_fail_if` before anything changes, `flash`,
   `flash_dont_fail` (30 retries), `run fastboot --set-active=…`, `run fastboot reboot …`,
@@ -60,8 +62,8 @@ are needed: without an update applied by the phone, there is no Virtual A/B merg
 - **The zip.** The page reads `payload.bin` in place (format "CrAU", AOSP's
   `update_metadata.proto`): a full payload holds each partition as operations on 4 KiB blocks,
   REPLACE, REPLACE_XZ, REPLACE_BZ and ZERO, with a SHA-256 for every operation's data and every
-  partition. Before the phone is touched, it identifies the release by its SHA-256, refuses a
-  zip for another device or another Android version (LineageOS 24 is Android 17), and unpacks
+  partition. Before the phone is touched, it recognises a tested release by its SHA-256, refuses
+  a zip for another device or another Android version (LineageOS 24 is Android 17), and unpacks
   every partition once against its checksum: 6.1 GB, a few minutes. Its own XZ (`js/xz.js`) and
   bzip2 (`js/bzip2.js`) decompressors do the unpacking; blocks that repeat one 4-byte value,
   such as the zeros of a partition's free space, become FILL chunks of the sparse pieces and
